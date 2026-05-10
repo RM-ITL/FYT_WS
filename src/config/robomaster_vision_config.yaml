@@ -1,0 +1,206 @@
+# 海康相机基本参数配置
+camera:
+  parameters:
+    # 曝光时间（毫秒）
+    exposure_ms: 3.0  
+    # 增益
+    gain: 10.0 
+    # 帧率
+    fps: 120.0
+    # 输出图像尺寸
+    target_width: 1280
+    target_height: 1024
+    # 发布话题名称
+    image_topic: "image_topic"
+    # 调试模式（是否打印日志）
+    debug: false
+
+
+# YOLO配置
+yolo:
+  data_inspection:
+    opencv_display: false
+  model:
+    # path: "/home/guo/Calibration/YOLO_Weights_Two/red_v8_int8.xml"
+    path: "/home/guo/ITL_sentry_auto_new/src/model/best_blue_int8.xml"
+    device: "CPU"
+    conf_threshold: 0.55
+    iou_threshold: 0.5
+    request_pool_size: 4
+    max_pending_inferences: 8
+  classes:
+    - "blue"
+    - "red"
+  topics:
+    image_sub: "image_topic"
+    armor_pub: "detected_data"
+    annotated_image_pub: "yolo_detections_image"
+  armor:
+    width_factor: 2.0
+    height_factor: 2.0
+  visualization:
+    center_point:
+      x: 640
+      y: 512
+      radius: 5
+      color: [0, 0, 255]
+      thickness: -1
+
+yolo11:
+  yolo11_model_path: "/home/guo/ITL_sentry_auto_new/src/model/yolo11.xml"
+  # 推理设备
+  device: "CPU"  # 可选: CPU, GPU, MYRIAD
+  enemy_color: "blue"
+  # 检测阈值
+  threshold: 0.5
+  min_confidence: 0.8
+  score_threshold: 0.7
+  nms_threshold: 0.3
+
+
+# 装甲板过滤器配置
+armor_filter:
+  global_conf_threshold: 0.5
+  class_conf_threshold: 0.5
+  category_thresholds:
+    hero: 0.5
+    infantry_3: 0.5
+    infantry_4: 0.5
+    sentry: 0.3
+    unknown: 0.4
+  # 添加缺失的优先级配置 - 这是必需的！
+  priority_ranks:
+    infantry_3: 0     # 步兵3号最高优先级
+    infantry_4: 0     # 步兵4号最高优先级  
+    sentry: 1         # 哨兵中等优先级
+    hero: 2           # 英雄较低优先级
+    engineer: 3       # 工程更低优先级
+    unknown: 999      # 未知最低优先级
+  image_center: [640, 384]
+  overlap_threshold: 0.5
+
+# 装甲板分类器配置
+armor_classifier:
+  model:
+    path: "/home/guo/ITL_sentry_auto_new/src/model/mobilenet_v2.xml"
+    device: "CPU"
+    conf_threshold: 0.8
+  # 添加缺失的classes定义 - 这是必需的！
+  classes:
+    - "1"       # 英雄
+    - "2"       # 工程
+    - "3"       # 步兵3号
+    - "4"       # 步兵4号
+    - "Sentry"  # 哨兵
+  debug: false
+
+# 装甲板状态管理配置文件
+armor_state_manager:
+  ros__parameters:
+    # 发布频率
+    publish_rate: 100.0         # Hz, 发布跟踪结果的频率
+    
+    # 调试输出
+    enable_debug_output: false  # 是否启用调试日志输出
+    
+    # 装甲板线程参数
+    armor_thread:
+      life_time: 0.3          # 秒, 线程生命周期（无更新后的存活时间）
+      match_threshold: 100.0   # 像素, 匹配阈值（距离+编号惩罚）
+    
+      
+    # 目标追踪参数
+    target_tracker:
+      max_thread_per_target: 2 # 每个目标的最大线程数
+      target_timeout: 0.5      # 目标级别超时时间（秒
+      
+    # 目标特定配置（可选，当前代码中硬编码）
+    targets:
+      hero:  # 英雄 (ID: 1)
+        expected_armor_num: 4   # 期望装甲板数
+        max_visible_num: 2      # 最大可见数
+      engineer:  # 工程 (ID: 2)  
+        expected_armor_num: 4
+        max_visible_num: 2
+      infantry_3:  # 步兵3号 (ID: 3)
+        expected_armor_num: 4
+        max_visible_num: 2
+      infantry_4:  # 步兵4号 (ID: 4)
+        expected_armor_num: 4
+        max_visible_num: 2
+      sentry:  # 哨兵 (ID: -1)
+        expected_armor_num: 2   # 哨兵只有2块装甲板
+        max_visible_num: 1      # 最多看到1块
+
+# motion_model:运动模型相关的参数管理：
+## 位置滤波器PositionEkf的r_vec和t_vec：
+
+preditcor:
+  commmon-model:
+    prediction:
+      base_time: 0          # 基础补偿时间（秒）- 额外的安全余量
+      interval: 0.05           # 预测发布间隔（秒）
+      latency_filter_alpha: 0.2  # 延迟滤波系数（0-1，越大对新值响应越快）
+      latency_history_size: 20   # 保留的延迟历史记录数量
+      max_time: 0.1             # 最大预测时间限制（秒）
+      min_time: 0.01            # 最小预测时间限制（秒）
+      
+    ekf:
+      q:
+        pos: 0.01              # 位置过程噪声
+        vel: 100               # 速度过程噪声
+      r:
+        yaw: 1.0               # yaw测量噪声
+        pitch: 1.5             # pitch测量噪声
+        distance_factor: 50    # 距离相关的测量噪声系数
+        
+    tracker:
+      timeout: 1.0             # 跟踪器超时时间（秒）
+      min_update_count: 3      # 开始预测前的最小更新次数
+
+# 装甲板尺寸分类配置
+armor_size_classification:
+  large_armor_ratio: 1.84      # 大装甲板标准宽高比
+  small_armor_ratio: 1.08      # 小装甲板标准宽高比
+  ratio_threshold: 5.0        # 判断阈值（默认为两者中点）
+
+# 在文件末尾添加pointer配置
+pointer:
+  enable: true                    # 是否启用精确定位
+  enemy_color: "blue"            # 敌方颜色: "red" 或 "blue"
+  roi_expansion_ratio: 1.5       # ROI扩展比例
+  # ROI扩展参数
+  roi:
+    extend_width: 2.0      # 宽度扩展比例
+    extend_height: 1.6     # 高度扩展比例
+  
+  # 图像处理参数
+  binary:
+    threshold_ratio: 1.0   # 二值化阈值偏移
+    histogram_cut: 8       # 直方图切割阈值
+  
+  # 灯条检测参数
+  lightbar:
+    min_ratio: 2.0         # 最小长宽比
+    max_ratio: 20.0         # 最大长宽比
+    min_area: 50.0         # 最小面积
+    max_angle: 45.0        # 最大角度（度）
+  
+  # 灯条匹配参数
+  match:
+    max_angle_diff: 20.0   # 最大角度差
+    max_length_ratio: 2.0  # 最大长度比
+    max_area_ratio: 3.0    # 最大面积比
+    min_width_ratio: 1.0   # 最小宽高比
+    max_width_ratio: 5.0   # 最大宽高比
+    min_overlap_ratio: 0.3  # 灯条与检测框的最小重叠比例
+    require_center_in_box: true  # 要求配对中心在检测框内
+  
+  # 端点精确定位参数
+  refine:
+    radius_ratio: 0.1      # 重心计算半径比例
+    extend_distance: 32.0  # 端点延伸距离
+  
+  # 颜色检测参数
+  color:
+    enemy_threshold: 30.0  # 敌方颜色阈值

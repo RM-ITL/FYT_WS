@@ -1,0 +1,25 @@
+/**:
+##  ros__parameters:
+##    camera_info_url: package://rm_bringup/config/camera_info.yaml
+##    exposure_time: 2500
+##    gain: 15.0
+##    resolution_width: 1280
+##    resolution_height: 1024
+##    offsetX: 0
+##    offsetY: 0
+##    camera_name: "daheng"
+##    recording: false    #是否录制
+
+
+  ros__parameters:
+    # 让驱动从包内路径读取配置文件（避免绝对路径）
+    config_path: "/home/hou/FYT_WS/src/rm_bringup/config/camera_config.yaml"
+
+    # 下列为“采集参数”的占位，当前这版驱动不会读取它们，
+    # 仅作为未来扩展或统一配置的参考；实际以 camera_config.yaml 为准。
+    exposure_ms: 5.0
+    gain: 10.0
+    fps: 60.0
+    target_width: 1280
+    target_height: 1024
+    image_topic: "/image_raw"

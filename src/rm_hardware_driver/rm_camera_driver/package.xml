@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rm_camera_driver</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="zcf@llqg.com">zcf</maintainer>
+  <license>TODO: License declaration</license>
+
+  <!-- build tool dependency -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- build/export/exec dependencies -->
+  <build_depend>rclcpp</build_depend>
+  <build_export_depend>rclcpp</build_export_depend>
+  <exec_depend>rclcpp</exec_depend>
+
+  <build_depend>rclcpp_components</build_depend>
+  <build_export_depend>rclcpp_components</build_export_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+
+  <build_depend>sensor_msgs</build_depend>
+  <build_export_depend>sensor_msgs</build_export_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+
+  <build_depend>image_transport</build_depend>
+  <build_export_depend>image_transport</build_export_depend>
+  <exec_depend>image_transport</exec_depend>
+
+  <build_depend>image_transport_plugins</build_depend>
+  <build_export_depend>image_transport_plugins</build_export_depend>
+  <exec_depend>image_transport_plugins</exec_depend>
+
+  <build_depend>rm_utils</build_depend>
+  <build_export_depend>rm_utils</build_export_depend>
+  <exec_depend>rm_utils</exec_depend>
+
+  <build_depend>camera_info_manager</build_depend>
+  <build_export_depend>camera_info_manager</build_export_depend>
+  <exec_depend>camera_info_manager</exec_depend>
+
+  <build_depend>cv_bridge</build_depend>
+  <build_export_depend>cv_bridge</build_export_depend>
+  <exec_depend>cv_bridge</exec_depend>
+
+  <!-- other runtime dependencies -->
+  <exec_depend>camera_calibration</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

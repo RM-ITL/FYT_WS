@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <!-- 包的基本信息 -->
+  <name>serial</name>
+  <version>0.1.0</version>
+  <description>
+    将 PnP 解算后的角度增量通过串口发送给下位机的 ROS2 节点。
+    该节点订阅 /serial_cmd 话题，将 delta_yaw 和 delta_pitch 打包成自定义协议帧，
+    通过串口发送给电机控制器。
+  </description>
+
+  <!-- 维护者信息 - 请替换为您的信息 -->
+  <maintainer email="your_email@example.com">Your Name</maintainer>
+
+
+  <license>Apache-2.0</license>
+
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+
+  <build_depend>rclcpp</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>autoaim_msgs</build_depend>
+
+
+  <exec_depend>rclcpp</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>autoaim_msgs</exec_depend>
+
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+
+  <!-- 文档和额外信息（可选但推荐） -->
+  <url type="website">https://github.com/your_username/your_repo</url>
+  <url type="bugtracker">https://github.com/your_username/your_repo/issues</url>
+  <url type="repository">https://github.com/your_username/your_repo</url>
+
+  <!-- 作者信息（可选） -->
+  <author email="author@example.com">Author Name</author>
+
+  <!-- 包的分组标签，方便分类和搜索 -->
+  <group_depend>rosidl_interface_packages</group_depend>
+</package>

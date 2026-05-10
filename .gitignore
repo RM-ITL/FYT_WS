@@ -1,0 +1,12 @@
+.vscode/
+**/.vscode/
+.cache/
+build/
+install/
+log/
+**/build/
+**/install/
+**/log/
+**/compile_commands.json
+**/.built_by
+**/.colcon_install_layout

@@ -1,0 +1,17 @@
+camera:
+  parameters:
+    # 曝光时间（毫秒）
+    exposure_ms: 5.0
+
+    # 增益（相机 Gain，数值范围依设备型号而定）
+    gain: 10.0
+
+    # 采集帧率（FPS）
+    fps: 60.0
+
+    # 图像发布目标分辨率（驱动里会 resize 到该尺寸）
+    target_width: 1280
+    target_height: 1024
+
+    # 图像话题名（驱动会按此创建 publisher）
+    image_topic: "/image_raw"
