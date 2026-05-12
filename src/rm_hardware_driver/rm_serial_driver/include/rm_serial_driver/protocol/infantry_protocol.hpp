@@ -20,12 +20,35 @@
 #include <sensor_msgs/msg/imu.hpp>
 
 namespace fyt::serial_driver::protocol {
+
+enum class InfantryProtocolVersion : uint8_t {
+  Legacy16 = 0,   // 旧版16字节协议，仅发送 fire/pitch/yaw/distance
+  Feedforward = 1 // 新版协议，支持 yaw_vel/pitch_vel/yaw_acc/pitch_acc
+};
+
 // 步兵通信协议
 class ProtocolInfantry : public Protocol {
 public:
-  explicit ProtocolInfantry(std::string_view port_name, bool enable_data_print);
+  explicit ProtocolInfantry(std::string_view port_name,
+                            bool enable_data_print,
+                            InfantryProtocolVersion version =
+  InfantryProtocolVersion::Legacy16);
 
   ~ProtocolInfantry() = default;
+
+  // Send gimbal command to lower controller.
+    //
+    // Legacy16:
+    //   - send fire flag
+    //   - send pitch / yaw / distance only
+    //
+    // Feedforward:
+    //   - send control flag
+    //   - send fire flag
+    //   - send pitch / yaw
+    //   - send yaw_vel / pitch_vel
+    //   - send yaw_acc / pitch_acc
+    //   - optional distance field
 
   void send(const rm_interfaces::msg::GimbalCmd &data) override;
 
@@ -42,6 +65,7 @@ public:
 private:
   void sendImuData(const sensor_msgs::msg::Imu::SharedPtr msg);
 
+  InfantryProtocolVersion version_;
   FixedPacketTool<16>::SharedPtr packet_tool_;
 };
 }  // namespace fyt::serial_driver::protocol

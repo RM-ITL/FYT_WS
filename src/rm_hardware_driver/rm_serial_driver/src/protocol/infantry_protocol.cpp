@@ -20,22 +20,37 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 
 namespace fyt::serial_driver::protocol {
-ProtocolInfantry::ProtocolInfantry(std::string_view port_name, bool enable_data_print) {
+ProtocolInfantry::ProtocolInfantry(std::string_view port_name,
+                                     bool enable_data_print,
+                                     InfantryProtocolVersion version)
+  : version_(version) {
   auto uart_transporter = std::make_shared<UartTransporter>(std::string(port_name));
   packet_tool_ = std::make_shared<FixedPacketTool<16>>(uart_transporter);
   packet_tool_->enbaleDataPrint(enable_data_print);
 }
 
 void ProtocolInfantry::send(const rm_interfaces::msg::GimbalCmd &data) {
-  FixedPacket<16> packet;
-  // 标识符：0x01 表示云台控制数据
-  packet.loadData<unsigned char>(0x01, 1);
-  packet.loadData<unsigned char>(data.fire_advice ? FireState::Fire : FireState::NotFire, 2);
-  packet.loadData<float>(static_cast<float>(data.pitch), 3);
-  packet.loadData<float>(static_cast<float>(data.yaw), 7);
-  packet.loadData<float>(static_cast<float>(data.distance), 11);
-  packet_tool_->sendPacket(packet);
-}
+    if (version_ == InfantryProtocolVersion::Legacy16) {
+      FixedPacket<16> packet;
+      packet.loadData<unsigned char>(0x01, 1);
+      packet.loadData<unsigned char>(data.fire_advice ? FireState::Fire : FireState::NotFire, 2);
+      packet.loadData<float>(static_cast<float>(data.pitch), 3);
+      packet.loadData<float>(static_cast<float>(data.yaw), 7);
+      packet.loadData<float>(static_cast<float>(data.distance), 11);
+      packet_tool_->sendPacket(packet);
+      return;
+    }
+
+    // Feedforward protocol is not implemented yet.
+    // Fallback to legacy packet for now.
+    FixedPacket<16> packet;
+    packet.loadData<unsigned char>(0x01, 1);
+    packet.loadData<unsigned char>(data.fire_advice ? FireState::Fire : FireState::NotFire, 2);
+    packet.loadData<float>(static_cast<float>(data.pitch), 3);
+    packet.loadData<float>(static_cast<float>(data.yaw), 7);
+    packet.loadData<float>(static_cast<float>(data.distance), 11);
+    packet_tool_->sendPacket(packet);
+  }
 
 void ProtocolInfantry::sendImuData(const sensor_msgs::msg::Imu::SharedPtr msg) {
   // 从四元数转换为欧拉角

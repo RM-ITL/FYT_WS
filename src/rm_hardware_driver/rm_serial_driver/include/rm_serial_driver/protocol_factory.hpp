@@ -34,7 +34,10 @@ public:
                                                             std::string_view port_name,
                                                             bool enable_data_print) {
     if (protocol_type == "infantry") {
-      return std::make_unique<protocol::ProtocolInfantry>(port_name, enable_data_print);
+    return std::make_unique<protocol::ProtocolInfantry>(
+      port_name,
+      enable_data_print,
+      protocol::InfantryProtocolVersion::Legacy16);
     }
     if (protocol_type == "hero") {
       return std::make_unique<protocol::DefaultProtocol>(port_name, enable_data_print);
