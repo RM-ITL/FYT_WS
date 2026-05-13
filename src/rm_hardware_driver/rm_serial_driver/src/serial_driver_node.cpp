@@ -63,6 +63,8 @@ void SerialDriverNode::init() {
   // Publisher
   serial_receive_data_pub_ = this->create_publisher<rm_interfaces::msg::SerialReceiveData>(
     "serial/receive", rclcpp::SensorDataQoS());
+  gimbal_state_pub_ = this->create_publisher<rm_interfaces::msg::GimbalState>( 
+    "gimbal/state", rclcpp::SensorDataQoS());
 
   // TF broadcaster
   timestamp_offset_ = this->declare_parameter("timestamp_offset", 0.0);
@@ -102,6 +104,26 @@ void SerialDriverNode::listenLoop() {
       receive_data.header.frame_id = target_frame_;
       serial_receive_data_pub_->publish(receive_data);
 
+      // 统一只计算一次姿态
+      const double roll_rad = receive_data.roll * M_PI / 180.0;
+      const double pitch_rad = -receive_data.pitch * M_PI / 180.0;
+      const double yaw_rad = receive_data.yaw * M_PI / 180.0;
+
+      tf2::Quaternion q;
+      q.setRPY(roll_rad, pitch_rad, yaw_rad);
+
+      // 发布 gimbal/state
+      rm_interfaces::msg::GimbalState gimbal_state_msg;
+      gimbal_state_msg.header = receive_data.header;
+      gimbal_state_msg.orientation = tf2::toMsg(q);
+      gimbal_state_msg.yaw = receive_data.yaw;
+      gimbal_state_msg.pitch = receive_data.pitch;
+      gimbal_state_msg.yaw_vel = 0.0f;
+      gimbal_state_msg.pitch_vel = 0.0f;
+      gimbal_state_msg.bullet_speed = receive_data.bullet_speed;
+      gimbal_state_msg.bullet_count = 0;
+      gimbal_state_pub_->publish(gimbal_state_msg);
+
       for (auto &[service_name, client] : set_mode_clients_) {
         if (client.mode.load() != receive_data.mode && !client.on_waiting.load()) {
           setMode(client, receive_data.mode);
@@ -113,11 +135,6 @@ void SerialDriverNode::listenLoop() {
       t.header.stamp = this->now() + rclcpp::Duration::from_seconds(timestamp_offset_);
       t.header.frame_id = target_frame_;
       t.child_frame_id = "gimbal_link";
-      auto roll = receive_data.roll * M_PI / 180.0;
-      auto pitch = -receive_data.pitch * M_PI / 180.0;
-      auto yaw = receive_data.yaw * M_PI / 180.0;
-      tf2::Quaternion q;
-      q.setRPY(roll, pitch, yaw);
       t.transform.rotation = tf2::toMsg(q);
       tf_broadcaster_->sendTransform(t);
 
@@ -127,6 +144,7 @@ void SerialDriverNode::listenLoop() {
       q.setRPY(rpy[0], 0, 0);
       t.header.frame_id = target_frame_;
       t.child_frame_id = target_frame_ + "_rectify";
+      t.transform.rotation = tf2::toMsg(q);
       tf_broadcaster_->sendTransform(t);
     } else {
       auto error_message = protocol_->getErrorMessage();

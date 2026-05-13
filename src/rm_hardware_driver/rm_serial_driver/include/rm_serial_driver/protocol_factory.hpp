@@ -37,7 +37,7 @@ public:
     return std::make_unique<protocol::ProtocolInfantry>(
       port_name,
       enable_data_print,
-      protocol::InfantryProtocolVersion::Legacy16);
+      protocol::InfantryProtocolVersion::AutoAimV1);
     }
     if (protocol_type == "hero") {
       return std::make_unique<protocol::DefaultProtocol>(port_name, enable_data_print);

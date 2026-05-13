@@ -35,6 +35,7 @@
 #include "rm_serial_driver/protocol.hpp"
 #include "rm_serial_driver/protocol_factory.hpp"
 #include "rm_serial_driver/transporter_interface.hpp"
+#include "rm_interfaces/msg/gimbal_state.hpp"
 
 namespace fyt::serial_driver {
 
@@ -74,6 +75,7 @@ private:
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   // Publisher
   rclcpp::Publisher<rm_interfaces::msg::SerialReceiveData>::SharedPtr serial_receive_data_pub_;
+  rclcpp::Publisher<rm_interfaces::msg::GimbalState>::SharedPtr gimbal_state_pub_;
 
   // Broadcast tf from odom to gimbal_link
   double timestamp_offset_ = 0;

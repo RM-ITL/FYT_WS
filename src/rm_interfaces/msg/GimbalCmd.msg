@@ -1,9 +1,10 @@
 std_msgs/Header header
+bool control
+bool fire_advice
 float64 pitch
 float64 yaw
-float64 yaw_val
+float64 yaw_vel
 float64 pitch_vel
 float64 yaw_acc
 float64 pitch_acc
 float64 distance
-bool fire_advice
