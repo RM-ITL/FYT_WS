@@ -29,6 +29,7 @@
 #include <Eigen/Dense>
 // project
 #include "rm_interfaces/msg/gimbal_cmd.hpp"
+#include "rm_interfaces/msg/gimbal_state.hpp"
 #include "rm_interfaces/msg/target.hpp"
 #include "rm_utils/math/trajectory_compensator.hpp"
 #include "rm_utils/math/manual_compensator.hpp"
@@ -37,6 +38,7 @@ namespace fyt::auto_aim {
 // Solver class used to solve the gimbal command from tracked target
 class Solver {
 public:
+  void updateRuntimeState(const rm_interfaces::msg::GimbalState &state);
   explicit Solver(std::weak_ptr<rclcpp::Node> node);
   // explicit Solver(std::string trajectory_compensator_type, float max_tracking_v_yaw);
   ~Solver() = default;
@@ -52,6 +54,7 @@ public:
   std::vector<std::pair<double, double>> getTrajectory() const noexcept; 
 
 private:
+    rm_interfaces::msg::GimbalState runtime_state_;
   // Get the armor positions from the target robot
   std::vector<Eigen::Vector3d> getArmorPositions(const Eigen::Vector3d &target_center,
                                                  const double yaw,
@@ -74,6 +77,8 @@ private:
                        double &yaw,
                        double &pitch) const noexcept;
 
+  bool has_runtime_state_ = false;
+  
   bool isOnTarget(const double cur_yaw,
                   const double cur_pitch,
                   const double target_yaw,
@@ -84,6 +89,30 @@ private:
   std::unique_ptr<ManualCompensator> manual_compensator_;
 
   std::array<double, 3> rpy_;
+
+  double default_bullet_speed_;
+
+  struct ControlHistory {
+    bool valid = false;
+    rclcpp::Time stamp;
+    double yaw = 0.0;            // raw cmd yaw, rad
+    double pitch = 0.0;          // raw cmd pitch, rad
+    double filtered_yaw = 0.0;   // low-pass filtered yaw, rad
+    double filtered_pitch = 0.0; // low-pass filtered pitch, rad
+    double yaw_vel = 0.0;        // rad/s
+    double pitch_vel = 0.0;      // rad/s
+  };
+
+  ControlHistory last_control_;
+
+  double feedforward_alpha_;
+  bool enable_acceleration_feedforward_;
+  double max_yaw_vel_;
+  double max_pitch_vel_;
+  double max_yaw_acc_;
+  double max_pitch_acc_;
+  double max_delta_yaw_for_feedforward_;
+  double max_delta_pitch_for_feedforward_;
 
   double prediction_delay_;
   double controller_delay_;

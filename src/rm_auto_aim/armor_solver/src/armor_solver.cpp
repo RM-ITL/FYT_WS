@@ -39,7 +39,25 @@ Solver::Solver(std::weak_ptr<rclcpp::Node> n) : node_(n) {
   std::string compenstator_type = node->declare_parameter("solver.compensator_type", "ideal");
   trajectory_compensator_ = CompensatorFactory::createCompensator(compenstator_type);
   trajectory_compensator_->iteration_times = node->declare_parameter("solver.iteration_times", 20);
-  trajectory_compensator_->velocity = node->declare_parameter("solver.bullet_speed", 20.0);
+  default_bullet_speed_ = node->declare_parameter("solver.bullet_speed", 20.0);
+  trajectory_compensator_->velocity = default_bullet_speed_;
+
+  feedforward_alpha_ = node->declare_parameter("solver.feedforward_alpha", 0.25);
+  enable_acceleration_feedforward_ =
+    node->declare_parameter("solver.enable_acceleration_feedforward", false);
+  max_yaw_vel_ = node->declare_parameter("solver.max_yaw_vel", 15.0);
+  max_pitch_vel_ = node->declare_parameter("solver.max_pitch_vel", 15.0);
+
+  // 这两个优先对标 Auto_aim
+  max_yaw_acc_ = node->declare_parameter("solver.max_yaw_acc", 20.0);
+  max_pitch_acc_ = node->declare_parameter("solver.max_pitch_acc", 50.0);
+
+  // 突然跳变保护门限，单位 rad
+  max_delta_yaw_for_feedforward_ =
+    node->declare_parameter("solver.max_delta_yaw_for_feedforward", 8.0 * M_PI / 180.0);
+  max_delta_pitch_for_feedforward_ =
+    node->declare_parameter("solver.max_delta_pitch_for_feedforward", 8.0 * M_PI / 180.0);
+
   trajectory_compensator_->gravity = node->declare_parameter("solver.gravity", 9.8);
   trajectory_compensator_->resistance = node->declare_parameter("solver.resistance", 0.001);
 
@@ -54,6 +72,11 @@ Solver::Solver(std::weak_ptr<rclcpp::Node> n) : node_(n) {
   transfer_thresh_ = 5;
 
   node.reset();
+}
+
+void Solver::updateRuntimeState(const rm_interfaces::msg::GimbalState &state) {
+  runtime_state_ = state;
+  has_runtime_state_ = true;
 }
 
 rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &target,
@@ -74,14 +97,22 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
 
   // Get current roll, yaw and pitch of gimbal
   try {
-    auto gimbal_tf =
-      tf2_buffer_->lookupTransform(target.header.frame_id, "gimbal_link", tf2::TimePointZero);
-    auto msg_q = gimbal_tf.transform.rotation;
+    if (has_runtime_state_) {
+      // 当前 runtime_state_ 中 yaw / pitch 仍然是 degree
+      // Solver 内部一直按 rad 运算，所以这里先转 rad
+      rpy_[0] = 0.0;
+      rpy_[1] = -runtime_state_.pitch * M_PI / 180.0;
+      rpy_[2] = runtime_state_.yaw * M_PI / 180.0;
+    } else {
+      auto gimbal_tf =
+        tf2_buffer_->lookupTransform(target.header.frame_id, "gimbal_link", tf2::TimePointZero);
+      auto msg_q = gimbal_tf.transform.rotation;
 
-    tf2::Quaternion tf_q;
-    tf2::fromMsg(msg_q, tf_q);
-    tf2::Matrix3x3(tf_q).getRPY(rpy_[0], rpy_[1], rpy_[2]);
-    rpy_[1] = -rpy_[1];
+      tf2::Quaternion tf_q;
+      tf2::fromMsg(msg_q, tf_q);
+      tf2::Matrix3x3(tf_q).getRPY(rpy_[0], rpy_[1], rpy_[2]);
+      rpy_[1] = -rpy_[1];
+    }
   } catch (tf2::TransformException &ex) {
     FYT_ERROR("armor_solver", "{}", ex.what());
     throw ex;
@@ -90,6 +121,16 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   // Use flying time to approximately predict the position of target
   Eigen::Vector3d target_position(target.position.x, target.position.y, target.position.z);
   double target_yaw = target.yaw;
+
+  // 优先使用 runtime_state 的实时弹速；异常时回退到默认值
+  if (has_runtime_state_ &&
+      runtime_state_.bullet_speed > 10.0f &&
+      runtime_state_.bullet_speed < 30.0f) {
+    trajectory_compensator_->velocity = runtime_state_.bullet_speed;
+  } else {
+    trajectory_compensator_->velocity = default_bullet_speed_;
+  }
+
   double flying_time = trajectory_compensator_->getFlyingTime(target_position);
   double dt =
     (current_time - rclcpp::Time(target.header.stamp)).seconds() + flying_time + prediction_delay_;
@@ -177,11 +218,95 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   double cmd_pitch = pitch + pitch_offset;
   double cmd_yaw = angles::normalize_angle(yaw + yaw_offset);
 
+  // ==================== 前馈输出开始 ====================
+  double filtered_cmd_yaw = cmd_yaw;
+  double filtered_cmd_pitch = cmd_pitch;
+  double ff_yaw_vel = 0.0;
+  double ff_pitch_vel = 0.0;
+  double ff_yaw_acc = 0.0;
+  double ff_pitch_acc = 0.0;
+
+  bool feedforward_valid = false;
+
+  if (last_control_.valid) {
+    const double dt_ff = (current_time - last_control_.stamp).seconds();
+    const double raw_delta_yaw =
+      angles::shortest_angular_distance(last_control_.yaw, cmd_yaw);
+    const double raw_delta_pitch = cmd_pitch - last_control_.pitch;
+
+    // 1. 时间戳异常保护
+    if (dt_ff > 1e-4 && dt_ff < 0.2) {
+      // 2. 突然跳变保护：切板/重捕获时不输出离谱前馈
+      if (std::abs(raw_delta_yaw) < max_delta_yaw_for_feedforward_ &&
+          std::abs(raw_delta_pitch) < max_delta_pitch_for_feedforward_) {
+        // 3. 对最终控制角先做一级低通，再差分，降低静止目标噪声放大
+        filtered_cmd_yaw = angles::normalize_angle(
+          last_control_.filtered_yaw +
+          feedforward_alpha_ *
+            angles::shortest_angular_distance(last_control_.filtered_yaw, cmd_yaw));
+        filtered_cmd_pitch =
+          last_control_.filtered_pitch +
+          feedforward_alpha_ * (cmd_pitch - last_control_.filtered_pitch);
+
+        const double filtered_delta_yaw =
+          angles::shortest_angular_distance(last_control_.filtered_yaw, filtered_cmd_yaw);
+        const double filtered_delta_pitch =
+          filtered_cmd_pitch - last_control_.filtered_pitch;
+
+        // 4. 速度
+        ff_yaw_vel = filtered_delta_yaw / dt_ff;
+        ff_pitch_vel = filtered_delta_pitch / dt_ff;
+
+        // 5. 限幅速度
+        ff_yaw_vel = std::clamp(ff_yaw_vel, -max_yaw_vel_, max_yaw_vel_);
+        ff_pitch_vel = std::clamp(ff_pitch_vel, -max_pitch_vel_, max_pitch_vel_);
+
+        // 6. 当前静止目标噪声下加速度非常不稳定，默认关闭加速度前馈
+        if (enable_acceleration_feedforward_) {
+          ff_yaw_acc = (ff_yaw_vel - last_control_.yaw_vel) / dt_ff;
+          ff_pitch_acc = (ff_pitch_vel - last_control_.pitch_vel) / dt_ff;
+
+          // 7. 限幅加速度
+          ff_yaw_acc = std::clamp(ff_yaw_acc, -max_yaw_acc_, max_yaw_acc_);
+          ff_pitch_acc = std::clamp(ff_pitch_acc, -max_pitch_acc_, max_pitch_acc_);
+        }
+
+        feedforward_valid = true;
+      }
+    }
+  }
+
+  // 8. 如果目标当前不可控或前馈无效，则保持清零
+  if (!feedforward_valid) {
+    filtered_cmd_yaw = cmd_yaw;
+    filtered_cmd_pitch = cmd_pitch;
+    ff_yaw_vel = 0.0;
+    ff_pitch_vel = 0.0;
+    ff_yaw_acc = 0.0;
+    ff_pitch_acc = 0.0;
+  }
+  // ==================== 前馈输出结束 ====================
+
+  // 回填控制消息（消息层当前仍使用 degree）
+  gimbal_cmd.control = true;
+  gimbal_cmd.fire_advice = gimbal_cmd.fire_advice;
 
   gimbal_cmd.yaw = cmd_yaw * 180 / M_PI;
-  gimbal_cmd.pitch = cmd_pitch * 180 / M_PI;  
-  gimbal_cmd.yaw_diff = (cmd_yaw - rpy_[2]) * 180 / M_PI;
-  gimbal_cmd.pitch_diff = (cmd_pitch - rpy_[1]) * 180 / M_PI;
+  gimbal_cmd.pitch = cmd_pitch * 180 / M_PI;
+  gimbal_cmd.yaw_vel = ff_yaw_vel * 180 / M_PI;
+  gimbal_cmd.pitch_vel = ff_pitch_vel * 180 / M_PI;
+  gimbal_cmd.yaw_acc = ff_yaw_acc * 180 / M_PI;
+  gimbal_cmd.pitch_acc = ff_pitch_acc * 180 / M_PI;
+
+  // 更新历史
+  last_control_.valid = true;
+  last_control_.stamp = current_time;
+  last_control_.yaw = cmd_yaw;
+  last_control_.pitch = cmd_pitch;
+  last_control_.filtered_yaw = filtered_cmd_yaw;
+  last_control_.filtered_pitch = filtered_cmd_pitch;
+  last_control_.yaw_vel = ff_yaw_vel;
+  last_control_.pitch_vel = ff_pitch_vel;
 
   if (gimbal_cmd.fire_advice) {
     FYT_DEBUG("armor_solver", "You Need Fire!");

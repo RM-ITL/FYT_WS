@@ -88,6 +88,11 @@ private:
   rm_interfaces::msg::Target armor_target_;
   std::shared_ptr<tf2_filter> tf2_filter_;
 
+  // Subscriber for gimbal state
+  rclcpp::Subscription<rm_interfaces::msg::GimbalState>::SharedPtr gimbal_state_sub_;
+  rm_interfaces::msg::GimbalState latest_gimbal_state_;
+  bool has_gimbal_state_ = false;
+
   // Measurement publisher
   rclcpp::Publisher<rm_interfaces::msg::Measurement>::SharedPtr measure_pub_;
 

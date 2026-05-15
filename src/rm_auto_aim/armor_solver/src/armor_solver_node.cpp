@@ -141,6 +141,15 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
                                        std::bind(&ArmorSolverNode::timerCallback, this));
   armor_target_.header.frame_id = "";
 
+  // Subscriber for gimbal state
+  gimbal_state_sub_ = this->create_subscription<rm_interfaces::msg::GimbalState>(
+  "/gimbal/state",
+  rclcpp::SensorDataQoS(),
+  [this](const rm_interfaces::msg::GimbalState::SharedPtr msg) {
+    latest_gimbal_state_ = *msg;
+    has_gimbal_state_ = true;
+  });
+
   // Enable/Disable Armor Solver
   enable_ = true;
   set_mode_srv_ = this->create_service<rm_interfaces::srv::SetMode>(
@@ -165,36 +174,58 @@ void ArmorSolverNode::timerCallback() {
     return;
   }
 
-  // Init message
   rm_interfaces::msg::GimbalCmd control_msg;
+
+  auto fill_safe_cmd = [this](rm_interfaces::msg::GimbalCmd &cmd) {
+    cmd.header.stamp = this->now();
+    cmd.header.frame_id = target_frame_;
+
+    // 不控制、不发火
+    cmd.control = false;
+    cmd.fire_advice = false;
+
+    // 距离置无效
+    cmd.distance = -1.0;
+
+    // yaw / pitch 尽量保持当前云台状态，避免控制链突然跳零
+    if (has_gimbal_state_) {
+      cmd.yaw = latest_gimbal_state_.yaw;
+      cmd.pitch = latest_gimbal_state_.pitch;
+    } else {
+      cmd.yaw = 0.0;
+      cmd.pitch = 0.0;
+    }
+
+    // 所有前馈量清零
+    cmd.yaw_vel = 0.0;
+    cmd.pitch_vel = 0.0;
+    cmd.yaw_acc = 0.0;
+    cmd.pitch_acc = 0.0;
+  };
+
+  if (!has_gimbal_state_) {
+    fill_safe_cmd(control_msg);
+    gimbal_pub_->publish(control_msg);
+    return;
+  }
 
   // If target never detected
   if (armor_target_.header.frame_id.empty()) {
-    control_msg.yaw_diff = 0;
-    control_msg.pitch_diff = 0;
-    control_msg.distance = -1;
-    control_msg.pitch = 0;
-    control_msg.yaw = 0;
-    control_msg.fire_advice = false;
+    fill_safe_cmd(control_msg);
     gimbal_pub_->publish(control_msg);
     return;
   }
 
   if (armor_target_.tracking) {
     try {
+      solver_->updateRuntimeState(latest_gimbal_state_);
       control_msg = solver_->solve(armor_target_, this->now(), tf2_buffer_);
     } catch (...) {
-      FYT_ERROR("armor_solver", "Something went wrong in solver!");
-      control_msg.yaw_diff = 0;
-      control_msg.pitch_diff = 0;
-      control_msg.distance = -1;
-      control_msg.fire_advice = false;
+    FYT_ERROR("armor_solver", "Something went wrong in solver!");
+    fill_safe_cmd(control_msg);
     }
   } else {
-    control_msg.yaw_diff = 0;
-    control_msg.pitch_diff = 0;
-    control_msg.distance = -1;
-    control_msg.fire_advice = false;
+    fill_safe_cmd(control_msg);
   }
   gimbal_pub_->publish(control_msg);
 
