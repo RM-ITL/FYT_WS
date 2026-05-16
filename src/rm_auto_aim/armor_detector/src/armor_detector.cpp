@@ -282,4 +282,34 @@ void Detector::drawResults(cv::Mat &img) const noexcept {
   }
 }
 
+void Detector::applyParameter(const rclcpp::Parameter &param) noexcept {
+  if (param.get_name() == "binary_thres") {
+    binary_thres = param.as_int();
+  } else if (param.get_name() == "classifier_threshold") {
+    if (classifier) {
+      classifier->threshold = param.as_double();
+    }
+  } else if (param.get_name() == "light.min_ratio") {
+    light_params.min_ratio = param.as_double();
+  } else if (param.get_name() == "light.max_ratio") {
+    light_params.max_ratio = param.as_double();
+  } else if (param.get_name() == "light.max_angle") {
+    light_params.max_angle = param.as_double();
+  } else if (param.get_name() == "light.color_diff_thresh") {
+    light_params.color_diff_thresh = param.as_int();
+  } else if (param.get_name() == "armor.min_light_ratio") {
+    armor_params.min_light_ratio = param.as_double();
+  } else if (param.get_name() == "armor.min_small_center_distance") {
+    armor_params.min_small_center_distance = param.as_double();
+  } else if (param.get_name() == "armor.max_small_center_distance") {
+    armor_params.max_small_center_distance = param.as_double();
+  } else if (param.get_name() == "armor.min_large_center_distance") {
+    armor_params.min_large_center_distance = param.as_double();
+  } else if (param.get_name() == "armor.max_large_center_distance") {
+    armor_params.max_large_center_distance = param.as_double();
+  } else if (param.get_name() == "armor.max_angle") {
+    armor_params.max_angle = param.as_double();
+  }
+}
+
 }  // namespace fyt::auto_aim

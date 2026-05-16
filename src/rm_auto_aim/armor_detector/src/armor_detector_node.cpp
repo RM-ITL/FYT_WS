@@ -59,6 +59,7 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
     : Node("armor_detector", options) {
   FYT_REGISTER_LOGGER("armor_detector", "~/fyt2024-log", INFO);
   FYT_INFO("armor_detector", "Starting ArmorDetectorNode!");
+  debug_ = this->declare_parameter("debug", true);
   // Detector
   detector_ = initDetector();
 
@@ -99,7 +100,6 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
       "armor_detector/marker", 10);
 
   // Debug Publishers
-  debug_ = this->declare_parameter("debug", true);
   if (debug_) {
     createDebugPublishers();
   }
@@ -214,69 +214,111 @@ void ArmorDetectorNode::imageCallback(
   armors_pub_->publish(armors_msg_);
 }
 
-std::unique_ptr<Detector> ArmorDetectorNode::initDetector() {
-  rcl_interfaces::msg::ParameterDescriptor param_desc;
-  param_desc.integer_range.resize(1);
-  param_desc.integer_range[0].step = 1;
-  param_desc.integer_range[0].from_value = 0;
-  param_desc.integer_range[0].to_value = 255;
-  int binary_thres = declare_parameter("binary_thres", 160, param_desc);
+std::unique_ptr<DetectorBase> ArmorDetectorNode::initDetector() {
+  backend_ = this->declare_parameter("backend", "traditional");
 
-  Detector::LightParams l_params = {
-      .min_ratio = declare_parameter("light.min_ratio", 0.02),
-      .max_ratio = declare_parameter("light.max_ratio", 2.0),
-      .max_angle = declare_parameter("light.max_angle", 50.0),
-      .color_diff_thresh =
-          static_cast<int>(declare_parameter("light.color_diff_thresh", 15))};
+  // ==================== traditional 分支 ====================
+  if (backend_ == "traditional") {
+    rcl_interfaces::msg::ParameterDescriptor param_desc;
+    param_desc.integer_range.resize(1);
+    param_desc.integer_range[0].step = 1;
+    param_desc.integer_range[0].from_value = 0;
+    param_desc.integer_range[0].to_value = 255;
+    int binary_thres = declare_parameter("binary_thres", 160, param_desc);
 
-  Detector::ArmorParams a_params = {
-      .min_light_ratio = declare_parameter("armor.min_light_ratio", 0.2),
-      .min_small_center_distance =
-          declare_parameter("armor.min_small_center_distance", 0.2),
-      .max_small_center_distance =
-          declare_parameter("armor.max_small_center_distance", 6.0),
-      .min_large_center_distance =
-          declare_parameter("armor.min_large_center_distance", 1.5),
-      .max_large_center_distance =
-          declare_parameter("armor.max_large_center_distance", 9.0),
-      .max_angle = declare_parameter("armor.max_angle", 45.0)};
+    Detector::LightParams l_params = {
+        .min_ratio = declare_parameter("light.min_ratio", 0.02),
+        .max_ratio = declare_parameter("light.max_ratio", 2.0),
+        .max_angle = declare_parameter("light.max_angle", 50.0),
+        .color_diff_thresh =
+            static_cast<int>(declare_parameter("light.color_diff_thresh", 15))};
 
-  int detect_color_param = declare_parameter("detect_color", 0); // 0蓝 1红
-  EnemyColor enemy_color = (detect_color_param == 0)
-                               ? EnemyColor::BLUE 
-                               : EnemyColor::RED;
+    Detector::ArmorParams a_params = {
+        .min_light_ratio = declare_parameter("armor.min_light_ratio", 0.2),
+        .min_small_center_distance =
+            declare_parameter("armor.min_small_center_distance", 0.2),
+        .max_small_center_distance =
+            declare_parameter("armor.max_small_center_distance", 6.0),
+        .min_large_center_distance =
+            declare_parameter("armor.min_large_center_distance", 1.5),
+        .max_large_center_distance =
+            declare_parameter("armor.max_large_center_distance", 9.0),
+        .max_angle = declare_parameter("armor.max_angle", 45.0)};
 
-  auto detector = std::make_unique<Detector>(binary_thres, enemy_color,
-                                             l_params, a_params);
+    int detect_color_param = declare_parameter("detect_color", 0); // 0蓝 1红
+    EnemyColor enemy_color = (detect_color_param == 0)
+                                ? EnemyColor::BLUE 
+                                : EnemyColor::RED;
 
-  // Init classifier
-  namespace fs = std::filesystem;
-  fs::path model_path = utils::URLResolver::getResolvedPath(
-      "package://armor_detector/model/lenet.onnx");
-  fs::path label_path = utils::URLResolver::getResolvedPath(
-      "package://armor_detector/model/label.txt");
-  FYT_ASSERT_MSG(fs::exists(model_path) && fs::exists(label_path),
-                 model_path.string() + " Not Found!");
+    auto detector = std::make_unique<Detector>(binary_thres, enemy_color,
+                                              l_params, a_params);
 
-  double threshold = this->declare_parameter("classifier_threshold", 0.05);
-  std::vector<std::string> ignore_classes = this->declare_parameter(
-      "ignore_classes", std::vector<std::string>{"negative"});
-  detector->classifier = std::make_unique<NumberClassifier>(
-      model_path, label_path, threshold, ignore_classes);
+    // Init classifier
+    namespace fs = std::filesystem;
+    fs::path model_path = utils::URLResolver::getResolvedPath(
+        "package://armor_detector/model/lenet.onnx");
+    fs::path label_path = utils::URLResolver::getResolvedPath(
+        "package://armor_detector/model/label.txt");
+    FYT_ASSERT_MSG(fs::exists(model_path) && fs::exists(label_path),
+                  model_path.string() + " Not Found!");
 
-  // Init Corrector
-  bool use_pca = this->declare_parameter("use_pca", true);
-  if (use_pca) {
-    detector->corner_corrector = std::make_unique<LightCornerCorrector>();
+    double threshold = this->declare_parameter("classifier_threshold", 0.05);
+    std::vector<std::string> ignore_classes = this->declare_parameter(
+        "ignore_classes", std::vector<std::string>{"negative"});
+    detector->classifier = std::make_unique<NumberClassifier>(
+        model_path, label_path, threshold, ignore_classes);
+
+    // Init Corrector
+    bool use_pca = this->declare_parameter("use_pca", true);
+    if (use_pca) {
+      detector->corner_corrector = std::make_unique<LightCornerCorrector>();
+    }
+
+    // Set dynamic parameter callback
+    on_set_parameters_callback_handle_ =
+        this->add_on_set_parameters_callback(std::bind(
+            &ArmorDetectorNode::onSetParameters, this, std::placeholders::_1));
+
+    FYT_INFO("armor_detector", "Use traditional detector backend");
+    return detector;
+  }
+// ==================== yolo 分支 ====================
+  if (backend_ == "yolo") {
+    std::string model_path = this->declare_parameter(
+        "yolo.model_path",
+        "package://armor_detector/model/yolo_armor.xml");
+    std::string device = this->declare_parameter("yolo.device", "CPU");
+    double score_threshold = this->declare_parameter("yolo.score_threshold", 0.35);
+    double nms_threshold = this->declare_parameter("yolo.nms_threshold", 0.45);
+    bool use_traditional_refine =
+        this->declare_parameter("yolo.use_traditional_refine", false);
+
+    namespace fs = std::filesystem;
+    fs::path resolved_model_path = utils::URLResolver::getResolvedPath(model_path);
+    FYT_ASSERT_MSG(fs::exists(resolved_model_path),
+                    resolved_model_path.string() + " Not Found!");
+
+    int detect_color_param = declare_parameter("detect_color", 0);
+    EnemyColor enemy_color = (detect_color_param == 0)
+                                 ? EnemyColor::BLUE
+                                 : EnemyColor::RED;
+
+    auto detector = std::make_unique<YoloDetector>(
+        resolved_model_path.string(),
+        device,
+        static_cast<float>(score_threshold),
+        static_cast<float>(nms_threshold),
+        use_traditional_refine,
+        enemy_color,
+        debug_);
+
+    FYT_INFO("armor_detector", "Use yolo detector backend");
+    return detector;
   }
 
-  // Set dynamic parameter callback
-  on_set_parameters_callback_handle_ =
-      this->add_on_set_parameters_callback(std::bind(
-          &ArmorDetectorNode::onSetParameters, this, std::placeholders::_1));
-
-  return detector;
+  throw std::runtime_error("Unknown detector backend: " + backend_);
 }
+
 
 std::vector<Armor> ArmorDetectorNode::detectArmors(
     const sensor_msgs::msg::Image::ConstSharedPtr &img_msg) {
@@ -290,30 +332,37 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
 
   // Publish debug info
   if (debug_) {
-    binary_img_pub_.publish(
-        cv_bridge::CvImage(img_msg->header, "mono8", detector_->binary_img)
-            .toImageMsg());
+    const auto &binary_img = detector_->binaryImage();
+    if (!binary_img.empty()) {
+      binary_img_pub_.publish(
+          cv_bridge::CvImage(img_msg->header, "mono8", binary_img)
+              .toImageMsg());
+    }
 
-    // Sort lights and armors data by x coordinate
-    std::sort(detector_->debug_lights.data.begin(),
-              detector_->debug_lights.data.end(),
+    auto &debug_lights = detector_->debugLights();
+    auto &debug_armors = detector_->debugArmors();
+
+    std::sort(debug_lights.data.begin(),
+              debug_lights.data.end(),
               [](const auto &l1, const auto &l2) {
                 return l1.center_x < l2.center_x;
               });
-    std::sort(detector_->debug_armors.data.begin(),
-              detector_->debug_armors.data.end(),
+    std::sort(debug_armors.data.begin(),
+              debug_armors.data.end(),
               [](const auto &a1, const auto &a2) {
                 return a1.center_x < a2.center_x;
               });
 
-    lights_data_pub_->publish(detector_->debug_lights);
-    armors_data_pub_->publish(detector_->debug_armors);
+    lights_data_pub_->publish(debug_lights);
+    armors_data_pub_->publish(debug_armors);
 
     if (!armors.empty()) {
       auto all_num_img = detector_->getAllNumbersImage();
-      number_img_pub_.publish(
-          *cv_bridge::CvImage(img_msg->header, "mono8", all_num_img)
-               .toImageMsg());
+      if (!all_num_img.empty()) {
+        number_img_pub_.publish(
+            *cv_bridge::CvImage(img_msg->header, "mono8", all_num_img)
+                 .toImageMsg());
+      }
     }
 
     detector_->drawResults(img);
@@ -339,31 +388,7 @@ ArmorDetectorNode::onSetParameters(std::vector<rclcpp::Parameter> parameters) {
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
   for (const auto &param : parameters) {
-    if (param.get_name() == "binary_thres") {
-      detector_->binary_thres = param.as_int();
-    } else if (param.get_name() == "classifier_threshold") {
-      detector_->classifier->threshold = param.as_double();
-    } else if (param.get_name() == "light.min_ratio") {
-      detector_->light_params.min_ratio = param.as_double();
-    } else if (param.get_name() == "light.max_ratio") {
-      detector_->light_params.max_ratio = param.as_double();
-    } else if (param.get_name() == "light.max_angle") {
-      detector_->light_params.max_angle = param.as_double();
-    } else if (param.get_name() == "light.color_diff_thresh") {
-      detector_->light_params.color_diff_thresh = param.as_int();
-    } else if (param.get_name() == "armor.min_light_ratio") {
-      detector_->armor_params.min_light_ratio = param.as_double();
-    } else if (param.get_name() == "armor.min_small_center_distance") {
-      detector_->armor_params.min_small_center_distance = param.as_double();
-    } else if (param.get_name() == "armor.max_small_center_distance") {
-      detector_->armor_params.max_small_center_distance = param.as_double();
-    } else if (param.get_name() == "armor.min_large_center_distance") {
-      detector_->armor_params.min_large_center_distance = param.as_double();
-    } else if (param.get_name() == "armor.max_large_center_distance") {
-      detector_->armor_params.max_large_center_distance = param.as_double();
-    } else if (param.get_name() == "armor.max_angle") {
-      detector_->armor_params.max_angle = param.as_double();
-    }
+    detector_->applyParameter(param);
   }
   return result;
 }

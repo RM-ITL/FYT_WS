@@ -33,9 +33,10 @@
 #include "armor_detector/number_classifier.hpp"
 #include "rm_interfaces/msg/debug_armors.hpp"
 #include "rm_interfaces/msg/debug_lights.hpp"
+#include "armor_detector/detector_base.hpp"
 
 namespace fyt::auto_aim {
-class Detector {
+class Detector : public DetectorBase {
 public:
   struct LightParams {
     // width / height
@@ -71,6 +72,10 @@ public:
   // For debug usage
   cv::Mat getAllNumbersImage() const noexcept;
   void drawResults(cv::Mat &img) const noexcept;
+  const cv::Mat &binaryImage() const noexcept override { return binary_img; }
+  rm_interfaces::msg::DebugLights &debugLights() noexcept override { return debug_lights; }
+  rm_interfaces::msg::DebugArmors &debugArmors() noexcept override { return debug_armors; }
+  void applyParameter(const rclcpp::Parameter &param) noexcept override;
 
   // Parameters
   int binary_thres;

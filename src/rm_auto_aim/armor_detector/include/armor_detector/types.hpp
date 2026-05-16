@@ -19,6 +19,7 @@
 
 // std
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <string>
 // 3rd party
@@ -97,7 +98,7 @@ struct Light : public cv::RotatedRect {
 
 // Struct used to store the armor
 struct Armor {
-  static constexpr const int N_LANDMARKS = 6;
+  static constexpr const int N_LANDMARKS = 4;
   static constexpr const int N_LANDMARKS_2 = N_LANDMARKS * 2;
   Armor() = default;
   Armor(const Light &l1, const Light &l2) {
@@ -132,22 +133,20 @@ struct Armor {
 
   // Landmarks start from bottom left in clockwise order
   std::vector<cv::Point2f> landmarks() const {
-    if constexpr (N_LANDMARKS == 4) {
-      return {left_light.bottom, left_light.top, right_light.top, right_light.bottom};
-    } else {
-      return {left_light.bottom,
-              left_light.center,
-              left_light.top,
-              right_light.top,
-              right_light.center,
-              right_light.bottom};
+    if (has_corners) {
+      return {corners[0], corners[1], corners[2], corners[3]};
     }
+    return {left_light.bottom, left_light.top, right_light.top, right_light.bottom};
   }
 
   // Light pairs part
   Light left_light, right_light;
   cv::Point2f center;
   ArmorType type;
+  EnemyColor color = EnemyColor::WHITE;
+  cv::Rect bbox;
+  std::array<cv::Point2f, 4> corners{};
+  bool has_corners = false;
 
   // Number part
   cv::Mat number_img;

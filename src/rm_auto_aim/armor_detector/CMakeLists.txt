@@ -20,6 +20,7 @@ set(EXTERNAL_LIBS ${G2O_LIBRARIES})
 
 find_package(ament_cmake_auto REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(OpenVINO REQUIRED)
 find_package(TBB REQUIRED COMPONENTS tbb)
 # 注释掉原有的 g2o 自动查找
 # find_package(G2O REQUIRED)
@@ -72,6 +73,7 @@ target_link_libraries(${PROJECT_NAME}
   g2o_types_slam3d
   g2o_solver_dense
   fmt::fmt
+  openvino::runtime
   tbb
 )
 

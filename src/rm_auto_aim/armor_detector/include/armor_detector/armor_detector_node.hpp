@@ -49,6 +49,8 @@
 #include "rm_interfaces/srv/set_mode.hpp"
 #include "rm_utils/heartbeat.hpp"
 #include "rm_utils/logger/log.hpp"
+#include "armor_detector/detector_base.hpp"
+#include "armor_detector/yolo_detector.hpp"
 
 namespace fyt::auto_aim {
 
@@ -64,7 +66,7 @@ private:
   // void targetCallback(const rm_interfaces::msg::Target::SharedPtr
   // target_msg);
 
-  std::unique_ptr<Detector> initDetector();
+  std::unique_ptr<DetectorBase> initDetector();
 
   std::vector<Armor>
   detectArmors(const sensor_msgs::msg::Image::ConstSharedPtr &img_msg);
@@ -88,7 +90,9 @@ private:
   HeartBeatPublisher::SharedPtr heartbeat_;
 
   // Armor Detector
-  std::unique_ptr<Detector> detector_;
+  std::unique_ptr<DetectorBase> detector_;
+  std::string backend_;
+
 
   // Pose Solver
   bool use_ba_;
