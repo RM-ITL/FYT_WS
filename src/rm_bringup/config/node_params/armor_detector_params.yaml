@@ -29,12 +29,3 @@
     yolo.score_threshold: 0.7
     yolo.nms_threshold: 0.3
     yolo.use_traditional_refine: false
-
-    backend: "traditional"
-
-    yolo:
-      model_path: "package://armor_detector/model/yolo_armor.xml"
-      device: "CPU"
-      score_threshold: 0.35
-      nms_threshold: 0.45
-      use_traditional_refine: false
