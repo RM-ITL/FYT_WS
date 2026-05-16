@@ -215,7 +215,7 @@ void ArmorDetectorNode::imageCallback(
 }
 
 std::unique_ptr<DetectorBase> ArmorDetectorNode::initDetector() {
-  backend_ = this->declare_parameter("backend", "traditional");
+  backend_ = this->declare_parameter("backend", "yolo");
 
   // ==================== traditional 分支 ====================
   if (backend_ == "traditional") {

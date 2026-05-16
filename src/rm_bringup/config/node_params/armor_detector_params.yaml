@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     debug: true
-    backend: "traditional"
+    backend: "yolo"
     target_frame: odom
     detect_color: 1 # 0: blue, 1: red
     binary_thres: 80
