@@ -38,6 +38,13 @@ namespace fyt::auto_aim {
 // Solver class used to solve the gimbal command from tracked target
 class Solver {
 public:
+  struct PredictedCommand {
+    double yaw = 0.0;
+    double pitch = 0.0;
+    double distance = -1.0;
+    bool valid = false;
+  };
+
   void updateRuntimeState(const rm_interfaces::msg::GimbalState &state);
   explicit Solver(std::weak_ptr<rclcpp::Node> node);
   // explicit Solver(std::string trajectory_compensator_type, float max_tracking_v_yaw);
@@ -77,6 +84,10 @@ private:
                        double &yaw,
                        double &pitch) const noexcept;
 
+  PredictedCommand predictCommandAtTime(const rm_interfaces::msg::Target &target,
+                                        double future_time_s,
+                                        bool aim_center) const noexcept;
+
   bool has_runtime_state_ = false;
   
   bool isOnTarget(const double cur_yaw,
@@ -84,6 +95,12 @@ private:
                   const double target_yaw,
                   const double target_pitch,
                   const double distance) const noexcept;
+
+  bool distance_based_shooter_check(const double cur_yaw,
+                                    const double cur_pitch,
+                                    const double target_yaw,
+                                    const double target_pitch,
+                                    const double distance) const noexcept;
 
   std::unique_ptr<TrajectoryCompensator> trajectory_compensator_;
   std::unique_ptr<ManualCompensator> manual_compensator_;
@@ -107,12 +124,19 @@ private:
 
   double feedforward_alpha_;
   bool enable_acceleration_feedforward_;
+  double predictive_ff_dt_;
   double max_yaw_vel_;
   double max_pitch_vel_;
   double max_yaw_acc_;
   double max_pitch_acc_;
   double max_delta_yaw_for_feedforward_;
   double max_delta_pitch_for_feedforward_;
+
+  double near_tolerance_yaw_;
+  double near_tolerance_pitch_;
+  double far_tolerance_yaw_;
+  double far_tolerance_pitch_;
+  double strict_distance_threshold_;
 
   double prediction_delay_;
   double controller_delay_;

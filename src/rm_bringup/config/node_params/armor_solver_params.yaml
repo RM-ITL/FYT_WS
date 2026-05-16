@@ -31,12 +31,18 @@
       bullet_speed: 25.0
       feedforward_alpha: 0.25
       enable_acceleration_feedforward: false
+      predictive_ff_dt: 0.01
       max_yaw_vel: 5.0
       max_pitch_vel: 3.0
       max_yaw_acc: 20.0
       max_pitch_acc: 50.0
       max_delta_yaw_for_feedforward: 0.03
       max_delta_pitch_for_feedforward: 0.02
+      near_tolerance_yaw: 0.0314
+      near_tolerance_pitch: 0.0314
+      far_tolerance_yaw: 0.0227
+      far_tolerance_pitch: 0.0227
+      strict_distance_threshold: 2.0
       compenstator_type: "ideal"
       gravity: 10.0
       resistance: 0.092

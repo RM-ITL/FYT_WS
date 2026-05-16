@@ -45,6 +45,7 @@ Solver::Solver(std::weak_ptr<rclcpp::Node> n) : node_(n) {
   feedforward_alpha_ = node->declare_parameter("solver.feedforward_alpha", 0.25);
   enable_acceleration_feedforward_ =
     node->declare_parameter("solver.enable_acceleration_feedforward", false);
+  predictive_ff_dt_ = node->declare_parameter("solver.predictive_ff_dt", 0.01);
   max_yaw_vel_ = node->declare_parameter("solver.max_yaw_vel", 15.0);
   max_pitch_vel_ = node->declare_parameter("solver.max_pitch_vel", 15.0);
 
@@ -57,6 +58,17 @@ Solver::Solver(std::weak_ptr<rclcpp::Node> n) : node_(n) {
     node->declare_parameter("solver.max_delta_yaw_for_feedforward", 8.0 * M_PI / 180.0);
   max_delta_pitch_for_feedforward_ =
     node->declare_parameter("solver.max_delta_pitch_for_feedforward", 8.0 * M_PI / 180.0);
+
+  near_tolerance_yaw_ =
+    node->declare_parameter("solver.near_tolerance_yaw", 1.8 * M_PI / 180.0);
+  near_tolerance_pitch_ =
+    node->declare_parameter("solver.near_tolerance_pitch", 1.8 * M_PI / 180.0);
+  far_tolerance_yaw_ =
+    node->declare_parameter("solver.far_tolerance_yaw", 1.3 * M_PI / 180.0);
+  far_tolerance_pitch_ =
+    node->declare_parameter("solver.far_tolerance_pitch", 1.3 * M_PI / 180.0);
+  strict_distance_threshold_ =
+    node->declare_parameter("solver.strict_distance_threshold", 2.0);
 
   trajectory_compensator_->gravity = node->declare_parameter("solver.gravity", 9.8);
   trajectory_compensator_->resistance = node->declare_parameter("solver.resistance", 0.001);
@@ -90,6 +102,23 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
     controller_delay_ = node->get_parameter("solver.controller_delay").as_double();
     side_angle_ = node->get_parameter("solver.side_angle").as_double();
     min_switching_v_yaw_ = node->get_parameter("solver.min_switching_v_yaw").as_double();
+    predictive_ff_dt_ = node->get_parameter("solver.predictive_ff_dt").as_double();
+    feedforward_alpha_ = node->get_parameter("solver.feedforward_alpha").as_double();
+    enable_acceleration_feedforward_ =
+      node->get_parameter("solver.enable_acceleration_feedforward").as_bool();
+    max_yaw_vel_ = node->get_parameter("solver.max_yaw_vel").as_double();
+    max_pitch_vel_ = node->get_parameter("solver.max_pitch_vel").as_double();
+    max_yaw_acc_ = node->get_parameter("solver.max_yaw_acc").as_double();
+    max_pitch_acc_ = node->get_parameter("solver.max_pitch_acc").as_double();
+    max_delta_yaw_for_feedforward_ =
+      node->get_parameter("solver.max_delta_yaw_for_feedforward").as_double();
+    max_delta_pitch_for_feedforward_ =
+      node->get_parameter("solver.max_delta_pitch_for_feedforward").as_double();
+    near_tolerance_yaw_ = node->get_parameter("solver.near_tolerance_yaw").as_double();
+    near_tolerance_pitch_ = node->get_parameter("solver.near_tolerance_pitch").as_double();
+    far_tolerance_yaw_ = node->get_parameter("solver.far_tolerance_yaw").as_double();
+    far_tolerance_pitch_ = node->get_parameter("solver.far_tolerance_pitch").as_double();
+    strict_distance_threshold_ = node->get_parameter("solver.strict_distance_threshold").as_double();
     node.reset();
   } catch (const std::runtime_error &e) {
     FYT_ERROR("armor_solver", "{}", e.what());
@@ -120,7 +149,6 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
 
   // Use flying time to approximately predict the position of target
   Eigen::Vector3d target_position(target.position.x, target.position.y, target.position.z);
-  double target_yaw = target.yaw;
 
   // 优先使用 runtime_state 的实时弹速；异常时回退到默认值
   if (has_runtime_state_ &&
@@ -131,34 +159,13 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
     trajectory_compensator_->velocity = default_bullet_speed_;
   }
 
-  double flying_time = trajectory_compensator_->getFlyingTime(target_position);
-  double dt =
+  const double flying_time = trajectory_compensator_->getFlyingTime(target_position);
+  const double base_delay =
     (current_time - rclcpp::Time(target.header.stamp)).seconds() + flying_time + prediction_delay_;
-  target_position.x() += dt * target.velocity.x;
-  target_position.y() += dt * target.velocity.y;
-  target_position.z() += dt * target.velocity.z;
-  target_yaw += dt * target.v_yaw;
-
-  // Choose the best armor to shoot
-  std::vector<Eigen::Vector3d> armor_positions = getArmorPositions(
-    target_position, target_yaw, target.radius_1, target.radius_2, target.d_zc, target.d_za, target.armors_num);
-  int idx =
-    selectBestArmor(armor_positions, target_position, target_yaw, target.v_yaw, target.armors_num);
-  auto chosen_armor_position = armor_positions.at(idx);
-  if (chosen_armor_position.norm() < 0.1) {
-    throw std::runtime_error("No valid armor to shoot");
-  }
-
-  // Calculate yaw, pitch, distance
-  double yaw, pitch;
-  calcYawAndPitch(chosen_armor_position, rpy_, yaw, pitch);
-  double distance = chosen_armor_position.norm();
 
   // Initialize gimbal_cmd
   rm_interfaces::msg::GimbalCmd gimbal_cmd;
   gimbal_cmd.header = target.header;
-  gimbal_cmd.distance = distance;
-  gimbal_cmd.fire_advice = isOnTarget(rpy_[2], rpy_[1], yaw, pitch, distance);
 
   switch (state) {
     case TRACKING_ARMOR: {
@@ -172,26 +179,6 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
         state = TRACKING_CENTER;
       }
 
-      // If isOnTarget() never returns true, adjust controller_delay to force the gimbal to move
-      if (controller_delay_ != 0) {
-        target_position.x() += controller_delay_ * target.velocity.x;
-        target_position.y() += controller_delay_ * target.velocity.y;
-        target_position.z() += controller_delay_ * target.velocity.z;
-        target_yaw += controller_delay_ * target.v_yaw;
-        armor_positions = getArmorPositions(target_position,
-                                            target_yaw,
-                                            target.radius_1,
-                                            target.radius_2,
-                                            target.d_zc,
-                                            target.d_za,
-                                            target.armors_num);
-        chosen_armor_position = armor_positions.at(idx);
-        gimbal_cmd.distance = chosen_armor_position.norm();
-        if (chosen_armor_position.norm() < 0.1) {
-          throw std::runtime_error("No valid armor to shoot");
-        }
-        calcYawAndPitch(chosen_armor_position, rpy_, yaw, pitch);
-      }
       break;
     }
     case TRACKING_CENTER: {
@@ -205,18 +192,29 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
         state = TRACKING_ARMOR;
         overflow_count_ = 0;
       }
-      gimbal_cmd.fire_advice = true;
-      calcYawAndPitch(target_position, rpy_, yaw, pitch);
       break;
     }
   }
 
-  // Compensate angle by angle_offset_map
-  auto angle_offset = manual_compensator_->angleHardCorrect(target_position.head(2).norm(), target_position.z());
-  double pitch_offset = angle_offset[0] * M_PI / 180;
-  double yaw_offset = angle_offset[1] * M_PI / 180;
-  double cmd_pitch = pitch + pitch_offset;
-  double cmd_yaw = angles::normalize_angle(yaw + yaw_offset);
+  const bool aim_center = (state == TRACKING_CENTER);
+
+  auto cmd_prev = predictCommandAtTime(target, std::max(0.0, base_delay + controller_delay_ - predictive_ff_dt_), aim_center);
+  auto cmd_now = predictCommandAtTime(target, std::max(0.0, base_delay + controller_delay_), aim_center);
+  auto cmd_next = predictCommandAtTime(target, std::max(0.0, base_delay + controller_delay_ + predictive_ff_dt_), aim_center);
+
+  if (!cmd_now.valid) {
+    throw std::runtime_error("No valid predicted command");
+  }
+
+  const double cmd_yaw = cmd_now.yaw;
+  const double cmd_pitch = cmd_now.pitch;
+  gimbal_cmd.distance = cmd_now.distance;
+
+  const bool level1 =
+    isOnTarget(rpy_[2], rpy_[1], cmd_yaw, cmd_pitch, cmd_now.distance);
+  const bool level2 =
+    distance_based_shooter_check(rpy_[2], rpy_[1], cmd_yaw, cmd_pitch, cmd_now.distance);
+  gimbal_cmd.fire_advice = level1 && level2;
 
   // ==================== 前馈输出开始 ====================
   double filtered_cmd_yaw = cmd_yaw;
@@ -228,11 +226,14 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
 
   bool feedforward_valid = false;
 
-  if (last_control_.valid) {
+  const bool predictive_window_valid = cmd_prev.valid && cmd_next.valid;
+
+  if (last_control_.valid && predictive_window_valid) {
     const double dt_ff = (current_time - last_control_.stamp).seconds();
+    const double predictive_dt = std::max(1e-4, predictive_ff_dt_);
     const double raw_delta_yaw =
-      angles::shortest_angular_distance(last_control_.yaw, cmd_yaw);
-    const double raw_delta_pitch = cmd_pitch - last_control_.pitch;
+      angles::shortest_angular_distance(last_control_.yaw, cmd_now.yaw);
+    const double raw_delta_pitch = cmd_now.pitch - last_control_.pitch;
 
     // 1. 时间戳异常保护
     if (dt_ff > 1e-4 && dt_ff < 0.2) {
@@ -243,28 +244,46 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
         filtered_cmd_yaw = angles::normalize_angle(
           last_control_.filtered_yaw +
           feedforward_alpha_ *
-            angles::shortest_angular_distance(last_control_.filtered_yaw, cmd_yaw));
+            angles::shortest_angular_distance(last_control_.filtered_yaw, cmd_now.yaw));
         filtered_cmd_pitch =
           last_control_.filtered_pitch +
-          feedforward_alpha_ * (cmd_pitch - last_control_.filtered_pitch);
+          feedforward_alpha_ * (cmd_now.pitch - last_control_.filtered_pitch);
 
-        const double filtered_delta_yaw =
-          angles::shortest_angular_distance(last_control_.filtered_yaw, filtered_cmd_yaw);
-        const double filtered_delta_pitch =
-          filtered_cmd_pitch - last_control_.filtered_pitch;
+        const double filtered_prev_yaw = angles::normalize_angle(
+          last_control_.filtered_yaw +
+          feedforward_alpha_ *
+            angles::shortest_angular_distance(last_control_.filtered_yaw, cmd_prev.yaw));
+        const double filtered_prev_pitch =
+          last_control_.filtered_pitch +
+          feedforward_alpha_ * (cmd_prev.pitch - last_control_.filtered_pitch);
 
-        // 4. 速度
-        ff_yaw_vel = filtered_delta_yaw / dt_ff;
-        ff_pitch_vel = filtered_delta_pitch / dt_ff;
+        const double filtered_next_yaw = angles::normalize_angle(
+          filtered_cmd_yaw +
+          feedforward_alpha_ *
+            angles::shortest_angular_distance(filtered_cmd_yaw, cmd_next.yaw));
+        const double filtered_next_pitch =
+          filtered_cmd_pitch +
+          feedforward_alpha_ * (cmd_next.pitch - filtered_cmd_pitch);
+
+        // 4. 使用预测轨迹的中心差分，替代单纯对最终命令做帧间差分
+        ff_yaw_vel =
+          angles::shortest_angular_distance(filtered_prev_yaw, filtered_next_yaw) / (2.0 * predictive_dt);
+        ff_pitch_vel = (filtered_next_pitch - filtered_prev_pitch) / (2.0 * predictive_dt);
 
         // 5. 限幅速度
         ff_yaw_vel = std::clamp(ff_yaw_vel, -max_yaw_vel_, max_yaw_vel_);
         ff_pitch_vel = std::clamp(ff_pitch_vel, -max_pitch_vel_, max_pitch_vel_);
 
-        // 6. 当前静止目标噪声下加速度非常不稳定，默认关闭加速度前馈
+        // 6. 参考轨迹二阶差分作为加速度前馈，默认仍可关闭以抑制静止目标噪声
         if (enable_acceleration_feedforward_) {
-          ff_yaw_acc = (ff_yaw_vel - last_control_.yaw_vel) / dt_ff;
-          ff_pitch_acc = (ff_pitch_vel - last_control_.pitch_vel) / dt_ff;
+          const double prev_to_now_yaw =
+            angles::shortest_angular_distance(filtered_prev_yaw, filtered_cmd_yaw);
+          const double now_to_next_yaw =
+            angles::shortest_angular_distance(filtered_cmd_yaw, filtered_next_yaw);
+          ff_yaw_acc = (now_to_next_yaw - prev_to_now_yaw) / (predictive_dt * predictive_dt);
+          ff_pitch_acc =
+            (filtered_next_pitch - 2.0 * filtered_cmd_pitch + filtered_prev_pitch) /
+            (predictive_dt * predictive_dt);
 
           // 7. 限幅加速度
           ff_yaw_acc = std::clamp(ff_yaw_acc, -max_yaw_acc_, max_yaw_acc_);
@@ -289,8 +308,6 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
 
   // 回填控制消息（消息层当前仍使用 degree）
   gimbal_cmd.control = true;
-  gimbal_cmd.fire_advice = gimbal_cmd.fire_advice;
-
   gimbal_cmd.yaw = cmd_yaw * 180 / M_PI;
   gimbal_cmd.pitch = cmd_pitch * 180 / M_PI;
   gimbal_cmd.yaw_vel = ff_yaw_vel * 180 / M_PI;
@@ -314,6 +331,49 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   return gimbal_cmd;
 }
 
+Solver::PredictedCommand Solver::predictCommandAtTime(const rm_interfaces::msg::Target &target,
+                                                      double future_time_s,
+                                                      bool aim_center) const noexcept {
+  PredictedCommand result;
+
+  Eigen::Vector3d target_position(target.position.x, target.position.y, target.position.z);
+  target_position.x() += future_time_s * target.velocity.x;
+  target_position.y() += future_time_s * target.velocity.y;
+  target_position.z() += future_time_s * target.velocity.z;
+  const double target_yaw = target.yaw + future_time_s * target.v_yaw;
+
+  Eigen::Vector3d aim_point = target_position;
+  if (!aim_center) {
+    auto armor_positions = getArmorPositions(target_position, target_yaw, target.radius_1,
+                                             target.radius_2, target.d_zc, target.d_za,
+                                             static_cast<size_t>(target.armors_num));
+    const int idx = selectBestArmor(armor_positions, target_position, target_yaw, target.v_yaw,
+                                    static_cast<size_t>(target.armors_num));
+    if (idx < 0 || idx >= static_cast<int>(armor_positions.size())) {
+      return result;
+    }
+    aim_point = armor_positions[static_cast<size_t>(idx)];
+  }
+
+  result.distance = aim_point.norm();
+  if (result.distance < 0.1) {
+    return result;
+  }
+
+  double yaw = 0.0;
+  double pitch = 0.0;
+  calcYawAndPitch(aim_point, rpy_, yaw, pitch);
+
+  auto angle_offset = manual_compensator_->angleHardCorrect(aim_point.head(2).norm(), aim_point.z());
+  const double pitch_offset = angle_offset[0] * M_PI / 180.0;
+  const double yaw_offset = angle_offset[1] * M_PI / 180.0;
+
+  result.yaw = angles::normalize_angle(yaw + yaw_offset);
+  result.pitch = pitch + pitch_offset;
+  result.valid = true;
+  return result;
+}
+
 bool Solver::isOnTarget(const double cur_yaw,
                         const double cur_pitch,
                         const double target_yaw,
@@ -332,6 +392,22 @@ bool Solver::isOnTarget(const double cur_yaw,
   }
 
   return false;
+}
+
+bool Solver::distance_based_shooter_check(const double cur_yaw,
+                                          const double cur_pitch,
+                                          const double target_yaw,
+                                          const double target_pitch,
+                                          const double distance) const noexcept {
+  const double tolerance_yaw =
+    distance > strict_distance_threshold_ ? far_tolerance_yaw_ : near_tolerance_yaw_;
+  const double tolerance_pitch =
+    distance > strict_distance_threshold_ ? far_tolerance_pitch_ : near_tolerance_pitch_;
+
+  const double yaw_err = std::abs(angles::shortest_angular_distance(cur_yaw, target_yaw));
+  const double pitch_err = std::abs(cur_pitch - target_pitch);
+
+  return yaw_err < tolerance_yaw && pitch_err < tolerance_pitch;
 }
 
 std::vector<Eigen::Vector3d> Solver::getArmorPositions(const Eigen::Vector3d &target_center,
