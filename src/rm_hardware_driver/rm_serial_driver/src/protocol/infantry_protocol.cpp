@@ -23,6 +23,25 @@
 
 namespace fyt::serial_driver::protocol {
 
+namespace {
+
+constexpr double kRadToDeg = 180.0 / M_PI;
+constexpr double kDegToRad = M_PI / 180.0;
+
+inline float rad2deg(float rad) {
+  return static_cast<float>(rad * kRadToDeg);
+}
+
+inline float deg2rad(float deg) {
+  return static_cast<float>(deg * kDegToRad);
+}
+
+inline double angularDistance(double from, double to) {
+  return std::abs(std::remainder(to - from, 2.0 * M_PI));
+}
+
+}  // namespace
+
 ProtocolInfantry::ProtocolInfantry(
   std::string_view port_name,
   bool enable_data_print,
@@ -134,13 +153,21 @@ void ProtocolInfantry::sendVisionCmdV1(const rm_interfaces::msg::GimbalCmd &data
   // FYT_WS 内部消息层统一使用弧度制；该协议本身也使用弧度制。
   packet.mode = data.control ? (data.fire_advice ? 2 : 1) : 0;
 
-  packet.yaw = static_cast<float>(data.yaw);
-  packet.yaw_vel = static_cast<float>(data.yaw_vel);
-  packet.yaw_acc = static_cast<float>(data.yaw_acc);
+  const bool use_degree_unit = angle_unit_ == AngleUnit::Degree;
+  const auto yaw = static_cast<float>(data.yaw);
+  const auto yaw_vel = static_cast<float>(data.yaw_vel);
+  const auto yaw_acc = static_cast<float>(data.yaw_acc);
+  const auto pitch = static_cast<float>(data.pitch);
+  const auto pitch_vel = static_cast<float>(data.pitch_vel);
+  const auto pitch_acc = static_cast<float>(data.pitch_acc);
 
-  packet.pitch = static_cast<float>(data.pitch);
-  packet.pitch_vel = static_cast<float>(data.pitch_vel);
-  packet.pitch_acc = static_cast<float>(data.pitch_acc);
+  packet.yaw = use_degree_unit ? rad2deg(yaw) : yaw;
+  packet.yaw_vel = use_degree_unit ? rad2deg(yaw_vel) : yaw_vel;
+  packet.yaw_acc = use_degree_unit ? rad2deg(yaw_acc) : yaw_acc;
+
+  packet.pitch = use_degree_unit ? rad2deg(pitch) : pitch;
+  packet.pitch_vel = use_degree_unit ? rad2deg(pitch_vel) : pitch_vel;
+  packet.pitch_acc = use_degree_unit ? rad2deg(pitch_acc) : pitch_acc;
 
   if (!writeExact(&packet, sizeof(packet))) {
     return;
@@ -186,12 +213,29 @@ bool ProtocolInfantry::recvGimbalStateV1(rm_interfaces::msg::SerialReceiveData &
   double yaw_rad = 0.0;
   tf2::Matrix3x3(q).getRPY(roll_rad, pitch_rad, yaw_rad);
 
+  if (angle_unit_ == AngleUnit::Unknown) {
+    const double packet_yaw = static_cast<double>(packet.yaw);
+    const double rad_error = angularDistance(packet_yaw, yaw_rad);
+    const double deg_error = angularDistance(static_cast<double>(deg2rad(packet.yaw)), yaw_rad);
+
+    if (rad_error + 1e-4 < deg_error) {
+      angle_unit_ = AngleUnit::Radian;
+    } else if (deg_error + 1e-4 < rad_error) {
+      angle_unit_ = AngleUnit::Degree;
+    }
+  }
+
   // pitch 依旧保持“消息层正上抬、TF层取负”的兼容语义，但单位统一为弧度
   data.roll = static_cast<float>(roll_rad);
   data.pitch = static_cast<float>(-pitch_rad);
   data.yaw = static_cast<float>(yaw_rad);
-  data.yaw_vel = packet.yaw_vel;
-  data.pitch_vel = -packet.pitch_vel;
+  if (angle_unit_ == AngleUnit::Degree) {
+    data.yaw_vel = deg2rad(packet.yaw_vel);
+    data.pitch_vel = -deg2rad(packet.pitch_vel);
+  } else {
+    data.yaw_vel = packet.yaw_vel;
+    data.pitch_vel = -packet.pitch_vel;
+  }
 
   last_error_message_ = "ok";
   return true;

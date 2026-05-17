@@ -5,4 +5,8 @@
     port_name: "/dev/ttyACM0"
     protocol: "infantry"
     enable_data_print: true # 改为true将会打印从串口读出来的16进制数据
-
+    q_calib:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      w: 1.0

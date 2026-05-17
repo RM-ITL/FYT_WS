@@ -89,6 +89,12 @@ public:
   std::string getErrorMessage() override { return last_error_message_; }
 
 private:
+  enum class AngleUnit : uint8_t {
+    Unknown = 0,
+    Radian = 1,
+    Degree = 2,
+  };
+
   void sendVisionCmdV1(const rm_interfaces::msg::GimbalCmd &data);
   bool recvGimbalStateV1(rm_interfaces::msg::SerialReceiveData &data);
 
@@ -98,6 +104,7 @@ private:
 
 private:
   InfantryProtocolVersion version_;
+  AngleUnit angle_unit_ = AngleUnit::Unknown;
   TransporterInterface::SharedPtr transporter_;
   std::string last_error_message_ = "unknown";
 };

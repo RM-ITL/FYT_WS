@@ -45,6 +45,19 @@ void SerialDriverNode::init() {
   std::string port_name = this->declare_parameter("port_name", "/dev/ttyUSB0");
   std::string protocol_type = this->declare_parameter("protocol", "infantry");
   bool enable_data_print = this->declare_parameter("enable_data_print", false);
+
+  // Optional quaternion calibration (aligned with Auto_aim_ITL):
+  // q_corrected = q_calib * q_lower
+  const double qx = this->declare_parameter("q_calib.x", 0.0);
+  const double qy = this->declare_parameter("q_calib.y", 0.0);
+  const double qz = this->declare_parameter("q_calib.z", 0.0);
+  const double qw = this->declare_parameter("q_calib.w", 1.0);
+  q_calib_.setValue(qx, qy, qz, qw);
+  if (q_calib_.length2() < 1e-12) {
+    q_calib_.setValue(0.0, 0.0, 0.0, 1.0);
+  } else {
+    q_calib_.normalize();
+  }
   // Create Protocol
   protocol_ = ProtocolFactory::createProtocol(protocol_type, port_name, enable_data_print);
   if (protocol_ == nullptr) {
@@ -111,13 +124,22 @@ void SerialDriverNode::listenLoop() {
 
       tf2::Quaternion q;
       q.setRPY(roll_rad, pitch_rad, yaw_rad);
+      // Apply calibration after reconstructing quaternion from RPY.
+      // Note: receive_data.* already uses "message-layer pitch up positive" semantics.
+      tf2::Quaternion q_corrected = q_calib_ * q;
+      q_corrected.normalize();
+
+      double roll_corr = 0.0;
+      double pitch_corr = 0.0;
+      double yaw_corr = 0.0;
+      tf2::Matrix3x3(q_corrected).getRPY(roll_corr, pitch_corr, yaw_corr);
 
       // 发布 gimbal/state
       rm_interfaces::msg::GimbalState gimbal_state_msg;
       gimbal_state_msg.header = receive_data.header;
-      gimbal_state_msg.orientation = tf2::toMsg(q);
-      gimbal_state_msg.yaw = receive_data.yaw;
-      gimbal_state_msg.pitch = receive_data.pitch;
+      gimbal_state_msg.orientation = tf2::toMsg(q_corrected);
+      gimbal_state_msg.yaw = static_cast<float>(yaw_corr);
+      gimbal_state_msg.pitch = static_cast<float>(-pitch_corr);
       gimbal_state_msg.yaw_vel = receive_data.yaw_vel;
       gimbal_state_msg.pitch_vel = receive_data.pitch_vel;
       gimbal_state_msg.bullet_speed = receive_data.bullet_speed;
@@ -135,11 +157,11 @@ void SerialDriverNode::listenLoop() {
       t.header.stamp = this->now() + rclcpp::Duration::from_seconds(timestamp_offset_);
       t.header.frame_id = target_frame_;
       t.child_frame_id = "gimbal_link";
-      t.transform.rotation = tf2::toMsg(q);
+      t.transform.rotation = tf2::toMsg(q_corrected);
       tf_broadcaster_->sendTransform(t);
 
       // odom_rectify: 转了roll角后的坐标系
-      Eigen::Quaterniond q_eigen(q.w(), q.x(), q.y(), q.z());
+      Eigen::Quaterniond q_eigen(q_corrected.w(), q_corrected.x(), q_corrected.y(), q_corrected.z());
       Eigen::Vector3d rpy = utils::getRPY(q_eigen.toRotationMatrix());
       q.setRPY(rpy[0], 0, 0);
       t.header.frame_id = target_frame_;

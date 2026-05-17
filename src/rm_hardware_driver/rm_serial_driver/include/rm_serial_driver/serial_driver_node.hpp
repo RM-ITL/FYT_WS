@@ -24,6 +24,7 @@
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <tf2/LinearMath/Quaternion.h>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 // project
@@ -80,6 +81,7 @@ private:
   // Broadcast tf from odom to gimbal_link
   double timestamp_offset_ = 0;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  tf2::Quaternion q_calib_{0.0, 0.0, 0.0, 1.0};
 };
 
 }  // namespace fyt::serial_driver
