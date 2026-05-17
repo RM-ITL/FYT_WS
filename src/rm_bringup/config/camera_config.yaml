@@ -13,5 +13,8 @@ camera:
     target_width: 1280
     target_height: 1024
 
+    # 当前海康链路现场表现为红蓝通道对调时，打开它来纠正显示颜色
+    swap_red_blue: true
+
     # 图像话题名（驱动会按此创建 publisher）
     image_topic: "/image_raw"

@@ -4,6 +4,7 @@
 #include "rclcpp_components/register_node_macro.hpp"
 #include <camera_info_manager/camera_info_manager.hpp>   // 新增
 #include <sensor_msgs/msg/camera_info.hpp>               // 新增
+#include <sensor_msgs/image_encodings.hpp>
 
 namespace camera  
 {
@@ -18,11 +19,13 @@ HikRobotNode::HikRobotNode(const rclcpp::NodeOptions& options)
     this->declare_parameter("config_path", "/home/hou/FYT_WS/src/rm_bringup/config/camera_config.yaml");
     this->declare_parameter("camera_name", "hik_camera");   // 新增
     this->declare_parameter("camera_info_url", "file:///home/hou/FYT_WS/src/rm_bringup/config/camera_calib.yaml"); // 新增
+    this->declare_parameter("camera_frame_id", "camera_link");
     
     this->get_parameter("config_path", config_path);
     std::string camera_name, camera_info_url;
     this->get_parameter("camera_name", camera_name);
     this->get_parameter("camera_info_url", camera_info_url);
+    this->get_parameter("camera_frame_id", frame_id_);
 
     if (!loadConfig(config_path)) {
         RCLCPP_ERROR(this->get_logger(), "配置加载失败");
@@ -55,9 +58,11 @@ HikRobotNode::HikRobotNode(const std::string& config_path, const std::string& na
 {
     this->declare_parameter("camera_name", "hik_camera"); 
     this->declare_parameter("camera_info_url", "file:///home/hou/FYT_WS/src/rm_bringup/config/camera_calib.yaml");
+    this->declare_parameter("camera_frame_id", "camera_link");
     std::string camera_name, camera_info_url;
     this->get_parameter("camera_name", camera_name);
     this->get_parameter("camera_info_url", camera_info_url);
+    this->get_parameter("camera_frame_id", frame_id_);
 
     if (!loadConfig(config_path)) {
         RCLCPP_ERROR(this->get_logger(), "配置加载失败");
@@ -118,6 +123,9 @@ bool HikRobotNode::loadConfig(const std::string& config_path)
             params["target_height"].as<int>()
         );
         image_topic_ = params["image_topic"].as<std::string>();
+        if (params["swap_red_blue"]) {
+            swap_red_blue_ = params["swap_red_blue"].as<bool>();
+        }
         
         RCLCPP_INFO(this->get_logger(), "配置加载成功 - 曝光:%.1fms 增益:%.1f FPS:%.1f",
                     exposure_us_/1000.0, gain_, fps_);
@@ -229,15 +237,34 @@ void HikRobotNode::captureThread()
             rclcpp::Time timestamp = this->now();
 
             cv::Mat raw_image(frame_info.nHeight, frame_info.nWidth, CV_8UC1, raw_buffer_.get());
-            cv::Mat rgb_image = convertBayer(raw_image, frame_info.enPixelType);
-            cv::Mat resized;
-            cv::resize(rgb_image, resized, target_size_, 0, 0, cv::INTER_LINEAR);
-            
-              // 显式构造 CameraData
+            cv::Mat bgr_image = convertBayer(raw_image, frame_info.enPixelType);
+            if (swap_red_blue_) {
+                cv::cvtColor(bgr_image, bgr_image, cv::COLOR_BGR2RGB);
+            }
+
             CameraData camera_data;
-            camera_data.img = resized.clone();
-            camera_data.stamp = timestamp;
-            queue_.push(camera_data);
+            camera_data.image = std::make_unique<sensor_msgs::msg::Image>();
+            auto &image = *camera_data.image;
+            image.header.stamp = timestamp;
+            image.header.frame_id = frame_id_;
+            image.encoding = sensor_msgs::image_encodings::BGR8;
+            image.height = target_size_.height;
+            image.width = target_size_.width;
+            image.step = static_cast<sensor_msgs::msg::Image::_step_type>(target_size_.width * 3);
+            image.data.resize(static_cast<size_t>(image.step) * image.height);
+
+            cv::Mat publish_view(target_size_, CV_8UC3, image.data.data());
+            if (bgr_image.size() == target_size_) {
+                bgr_image.copyTo(publish_view);
+            } else {
+                cv::resize(bgr_image, publish_view, target_size_, 0, 0, cv::INTER_LINEAR);
+            }
+
+            camera_data.camera_info = cam_info_mgr_->getCameraInfo();
+            camera_data.camera_info.header = image.header;
+            camera_data.camera_info.width = image.width;
+            camera_data.camera_info.height = image.height;
+            queue_.push(std::move(camera_data));
 
             timer.set_success(true);
         } else {
@@ -256,25 +283,16 @@ void HikRobotNode::processThread()
 {
     while (!node_shutdown_) {
         CameraData data;
-        queue_.pop(data);
-        
-        if (!data.img.empty()) {
+        if (!queue_.pop(data, 100)) {
+            continue;
+        }
+
+        if (data.image != nullptr) {
             auto timer = perf_monitor_.create_timer("process");
 
-            // 发布图像
-            auto img_msg = cv_bridge::CvImage();
-            img_msg.header.stamp = data.stamp;      // 用采集时的 stamp，保证两者一致
-            img_msg.header.frame_id = "camera_link"; // 与 TF 树一致
-            img_msg.encoding = "rgb8";
-            img_msg.image = data.img;
-            image_pub_->publish(*img_msg.toImageMsg());
-
-            // 发布 CameraInfo
-            auto ci = cam_info_mgr_->getCameraInfo();
-            ci.header = img_msg.header;
-            ci.width  = data.img.cols;
-            ci.height = data.img.rows;
-            cam_info_pub_->publish(ci);
+            image_pub_->publish(std::move(data.image));
+            cam_info_pub_->publish(data.camera_info);
+            timer.set_success(true);
         }
         
         std::this_thread::yield();

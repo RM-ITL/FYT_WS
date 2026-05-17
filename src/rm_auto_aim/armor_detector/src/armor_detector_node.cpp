@@ -70,6 +70,13 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
   armors_pub_ = this->create_publisher<rm_interfaces::msg::Armors>(
       "armor_detector/armors", rclcpp::SensorDataQoS());
 
+  result_img_publish_every_n_ =
+      this->declare_parameter("armor_detector.result_img_publish_every_n", 1);
+  result_img_scale_ =
+      this->declare_parameter("armor_detector.result_img_scale", 0.5);
+  draw_latency_text_ =
+      this->declare_parameter("armor_detector.draw_latency_text", true);
+
   // Transform initialize
   odom_frame_ = this->declare_parameter("target_frame", "odom");
   imu_to_camera_ = Eigen::Matrix3d::Identity();
@@ -150,26 +157,6 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
 
 void ArmorDetectorNode::imageCallback(
     const sensor_msgs::msg::Image::ConstSharedPtr img_msg) {
-  // Get the transform from odom to gimbal
-  try {
-    rclcpp::Time target_time = img_msg->header.stamp;
-    auto odom_to_gimbal = tf2_buffer_->lookupTransform(
-        odom_frame_, img_msg->header.frame_id, target_time,
-        rclcpp::Duration::from_seconds(0.01));
-    auto msg_q = odom_to_gimbal.transform.rotation;
-    tf2::Quaternion tf_q;
-    tf2::fromMsg(msg_q, tf_q);
-    tf2::Matrix3x3 tf2_matrix = tf2::Matrix3x3(tf_q);
-    imu_to_camera_ << tf2_matrix.getRow(0)[0], tf2_matrix.getRow(0)[1],
-        tf2_matrix.getRow(0)[2], tf2_matrix.getRow(1)[0],
-        tf2_matrix.getRow(1)[1], tf2_matrix.getRow(1)[2],
-        tf2_matrix.getRow(2)[0], tf2_matrix.getRow(2)[1],
-        tf2_matrix.getRow(2)[2];
-  } catch (...) {
-    FYT_ERROR("armor_detector", "Something Wrong when lookUpTransform");
-    return;
-  }
-
   // Detect armors
   auto armors = detectArmors(img_msg);
 
@@ -179,8 +166,27 @@ void ArmorDetectorNode::imageCallback(
 
   // Extract armor poses
   if (armor_pose_estimator_ != nullptr) {
-    armors_msg_.armors =
-        armor_pose_estimator_->extractArmorPoses(armors, imu_to_camera_);
+    try {
+      rclcpp::Time target_time = img_msg->header.stamp;
+      auto odom_to_gimbal = tf2_buffer_->lookupTransform(
+          odom_frame_, img_msg->header.frame_id, target_time,
+          rclcpp::Duration::from_seconds(0.01));
+      auto msg_q = odom_to_gimbal.transform.rotation;
+      tf2::Quaternion tf_q;
+      tf2::fromMsg(msg_q, tf_q);
+      tf2::Matrix3x3 tf2_matrix = tf2::Matrix3x3(tf_q);
+      imu_to_camera_ << tf2_matrix.getRow(0)[0], tf2_matrix.getRow(0)[1],
+          tf2_matrix.getRow(0)[2], tf2_matrix.getRow(1)[0],
+          tf2_matrix.getRow(1)[1], tf2_matrix.getRow(1)[2],
+          tf2_matrix.getRow(2)[0], tf2_matrix.getRow(2)[1],
+          tf2_matrix.getRow(2)[2];
+      armors_msg_.armors =
+          armor_pose_estimator_->extractArmorPoses(armors, imu_to_camera_);
+    } catch (...) {
+      FYT_WARN(
+          "armor_detector",
+          "Skip pose extraction for this frame because TF lookup failed");
+    }
 
     // std::string path =
     //   fmt::format("/home/zcf/fyt2024-log/images/{}/{}.jpg",
@@ -326,58 +332,77 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
   auto img = cv_bridge::toCvShare(img_msg, "rgb8")->image;
 
   auto armors = detector_->detect(img);
+  frame_index_++;
 
   auto final_time = this->now();
   auto latency = (final_time - img_msg->header.stamp).seconds() * 1000;
 
   // Publish debug info
   if (debug_) {
-    const auto &binary_img = detector_->binaryImage();
-    if (!binary_img.empty()) {
-      binary_img_pub_.publish(
-          cv_bridge::CvImage(img_msg->header, "mono8", binary_img)
-              .toImageMsg());
-    }
+    // YOLO 模式下只保留结果图发布，避免无意义的中间调试图像与消息开销
+    if (backend_ != "yolo") {
+      const auto &binary_img = detector_->binaryImage();
+      if (!binary_img.empty()) {
+        binary_img_pub_.publish(
+            cv_bridge::CvImage(img_msg->header, "mono8", binary_img)
+                .toImageMsg());
+      }
 
-    auto &debug_lights = detector_->debugLights();
-    auto &debug_armors = detector_->debugArmors();
+      auto &debug_lights = detector_->debugLights();
+      auto &debug_armors = detector_->debugArmors();
 
-    std::sort(debug_lights.data.begin(),
-              debug_lights.data.end(),
-              [](const auto &l1, const auto &l2) {
-                return l1.center_x < l2.center_x;
-              });
-    std::sort(debug_armors.data.begin(),
-              debug_armors.data.end(),
-              [](const auto &a1, const auto &a2) {
-                return a1.center_x < a2.center_x;
-              });
+      std::sort(debug_lights.data.begin(),
+                debug_lights.data.end(),
+                [](const auto &l1, const auto &l2) {
+                  return l1.center_x < l2.center_x;
+                });
+      std::sort(debug_armors.data.begin(),
+                debug_armors.data.end(),
+                [](const auto &a1, const auto &a2) {
+                  return a1.center_x < a2.center_x;
+                });
 
-    lights_data_pub_->publish(debug_lights);
-    armors_data_pub_->publish(debug_armors);
+      lights_data_pub_->publish(debug_lights);
+      armors_data_pub_->publish(debug_armors);
 
-    if (!armors.empty()) {
-      auto all_num_img = detector_->getAllNumbersImage();
-      if (!all_num_img.empty()) {
-        number_img_pub_.publish(
-            *cv_bridge::CvImage(img_msg->header, "mono8", all_num_img)
-                 .toImageMsg());
+      if (!armors.empty()) {
+        auto all_num_img = detector_->getAllNumbersImage();
+        if (!all_num_img.empty()) {
+          number_img_pub_.publish(
+              *cv_bridge::CvImage(img_msg->header, "mono8", all_num_img)
+                   .toImageMsg());
+        }
       }
     }
 
-    detector_->drawResults(img);
+    if (result_img_publish_every_n_ < 1) {
+      result_img_publish_every_n_ = 1;
+    }
 
-    // Draw camera center
-    cv::circle(img, cam_center_, 5, cv::Scalar(255, 0, 0), 2);
-    // Draw latency
-    std::stringstream latency_ss;
-    latency_ss << "Latency: " << std::fixed << std::setprecision(2) << latency
-               << "ms";
-    auto latency_s = latency_ss.str();
-    cv::putText(img, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
-                1.0, cv::Scalar(0, 255, 0), 2);
-    result_img_pub_.publish(
-        cv_bridge::CvImage(img_msg->header, "rgb8", img).toImageMsg());
+    if (result_img_pub_.getNumSubscribers() > 0 &&
+        frame_index_ % static_cast<std::size_t>(result_img_publish_every_n_) == 0) {
+      detector_->drawResults(img);
+
+      // Draw camera center
+      cv::circle(img, cam_center_, 5, cv::Scalar(255, 0, 0), 2);
+
+      if (draw_latency_text_) {
+        std::stringstream latency_ss;
+        latency_ss << "Latency: " << std::fixed << std::setprecision(2) << latency
+                   << "ms";
+        auto latency_s = latency_ss.str();
+        cv::putText(img, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
+                    1.0, cv::Scalar(0, 255, 0), 2);
+      }
+
+      cv::Mat publish_img = img;
+      if (result_img_scale_ > 0.0 && std::abs(result_img_scale_ - 1.0) > 1e-6) {
+        cv::resize(img, publish_img, cv::Size(), result_img_scale_, result_img_scale_);
+      }
+
+      result_img_pub_.publish(
+          cv_bridge::CvImage(img_msg->header, "rgb8", publish_img).toImageMsg());
+    }
   }
 
   return armors;
@@ -410,8 +435,6 @@ void ArmorDetectorNode::createDebugPublishers() noexcept {
       "armor_detector/debug_lights", 10);
   armors_data_pub_ = this->create_publisher<rm_interfaces::msg::DebugArmors>(
       "armor_detector/debug_armors", 10);
-  this->declare_parameter("armor_detector.result_img.jpeg_quality", 50);
-  this->declare_parameter("armor_detector.binary_img.jpeg_quality", 50);
   binary_img_pub_ =
       image_transport::create_publisher(this, "armor_detector/binary_img");
   number_img_pub_ =

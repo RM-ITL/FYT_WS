@@ -142,6 +142,11 @@ private:
   image_transport::Publisher binary_img_pub_;
   image_transport::Publisher number_img_pub_;
   image_transport::Publisher result_img_pub_;
+
+  int result_img_publish_every_n_ = 1;
+  double result_img_scale_ = 1.0;
+  bool draw_latency_text_ = true;
+  std::size_t frame_index_ = 0;
 };
 
 } // namespace fyt::auto_aim

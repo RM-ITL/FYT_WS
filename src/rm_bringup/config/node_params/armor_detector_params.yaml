@@ -29,3 +29,7 @@
     yolo.score_threshold: 0.7
     yolo.nms_threshold: 0.3
     yolo.use_traditional_refine: false
+
+    armor_detector.result_img_publish_every_n: 1
+    armor_detector.result_img_scale: 0.5
+    armor_detector.draw_latency_text: true

@@ -89,6 +89,8 @@ YoloDetector::YoloDetector(const std::string &model_path,
   model = ppp.build();
   compiled_model_ =
       core_.compile_model(model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+  infer_request_ = compiled_model_.create_infer_request();
+  input_canvas_.create(kInputSize, kInputSize, CV_8UC3);
 }
 
 bool YoloDetector::decodeClass(int class_id, ClassInfo &info) const noexcept {
@@ -96,10 +98,7 @@ bool YoloDetector::decodeClass(int class_id, ClassInfo &info) const noexcept {
     return false;
   }
   info = kClassMap[static_cast<size_t>(class_id)];
-  if (info.color == EnemyColor::WHITE) {
-    return false;
-  }
-  return info.color == detect_color_;
+  return info.color != EnemyColor::WHITE;
 }
 
 void YoloDetector::sortCorners(std::array<cv::Point2f, 4> &corners) const noexcept {
@@ -127,7 +126,7 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
   armors_.clear();
   debug_lights_.data.clear();
   debug_armors_.data.clear();
-  binary_img_ = cv::Mat::zeros(input.size(), CV_8UC1);
+  binary_img_.release();
 
   if (input.empty()) {
     return {};
@@ -139,15 +138,15 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
   const int h = static_cast<int>(input.rows * scale);
   const int w = static_cast<int>(input.cols * scale);
 
-  cv::Mat resized(kInputSize, kInputSize, CV_8UC3, cv::Scalar(0, 0, 0));
-  cv::resize(input, resized(cv::Rect(0, 0, w, h)), {w, h});
-  ov::Tensor input_tensor(ov::element::u8, {1, kInputSize, kInputSize, 3}, resized.data);
+  input_canvas_.setTo(cv::Scalar(0, 0, 0));
+  cv::resize(input, input_canvas_(cv::Rect(0, 0, w, h)), {w, h});
+  ov::Tensor input_tensor(
+      ov::element::u8, {1, kInputSize, kInputSize, 3}, input_canvas_.data);
 
-  auto infer_request = compiled_model_.create_infer_request();
-  infer_request.set_input_tensor(input_tensor);
-  infer_request.infer();
+  infer_request_.set_input_tensor(input_tensor);
+  infer_request_.infer();
 
-  auto output_tensor = infer_request.get_output_tensor();
+  auto output_tensor = infer_request_.get_output_tensor();
   auto output_shape = output_tensor.get_shape();
   cv::Mat output(output_shape[1], output_shape[2], CV_32F, output_tensor.data());
   cv::transpose(output, output);
@@ -156,6 +155,10 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
   std::vector<float> confidences;
   std::vector<cv::Rect> boxes;
   std::vector<std::array<cv::Point2f, 4>> corners_list;
+  class_ids.reserve(output.rows);
+  confidences.reserve(output.rows);
+  boxes.reserve(output.rows);
+  corners_list.reserve(output.rows);
 
   for (int r = 0; r < output.rows; ++r) {
     auto xywh = output.row(r).colRange(0, 4);
@@ -200,6 +203,10 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
   std::vector<int> indices;
   cv::dnn::NMSBoxes(boxes, confidences, score_threshold_, nms_threshold_, indices);
 
+  std::vector<Armor> candidate_armors;
+  candidate_armors.reserve(indices.size());
+  bool has_target_color = false;
+
   for (int idx : indices) {
     ClassInfo class_info{};
     if (!decodeClass(class_ids[idx], class_info)) {
@@ -216,7 +223,14 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
     armor.corners = corners_list[idx];
     armor.center = (armor.corners[0] + armor.corners[1] + armor.corners[2] + armor.corners[3]) * 0.25f;
     armor.classfication_result = class_info.number;
-    armors_.push_back(armor);
+    has_target_color = has_target_color || (armor.color == detect_color_);
+    candidate_armors.emplace_back(std::move(armor));
+  }
+
+  for (auto &armor : candidate_armors) {
+    if (has_target_color && armor.color != detect_color_) {
+      continue;
+    }
 
     rm_interfaces::msg::DebugArmor debug_armor;
     debug_armor.type = armorTypeToString(armor.type);
@@ -225,6 +239,7 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
     debug_armor.center_distance = 1.0;
     debug_armor.angle = 0.0;
     debug_armors_.data.emplace_back(debug_armor);
+    armors_.emplace_back(std::move(armor));
   }
 
   return armors_;
@@ -244,8 +259,17 @@ void YoloDetector::drawResults(cv::Mat &img) const noexcept {
     cv::line(img, c[1], c[2], cv::Scalar(0, 255, 0), 2);
     cv::line(img, c[2], c[3], cv::Scalar(0, 255, 0), 2);
     cv::line(img, c[3], c[0], cv::Scalar(0, 255, 0), 2);
-    cv::putText(img, armor.number, armor.center, cv::FONT_HERSHEY_SIMPLEX, 0.6,
-                cv::Scalar(0, 255, 0), 2);
+
+    const std::string text =
+      armorTypeToString(armor.type) + " " + armor.number + " " +
+      cv::format("%.2f", armor.confidence);
+
+    const int text_x = std::clamp(armor.bbox.x, 0, std::max(0, img.cols - 180));
+    const int text_y = std::clamp(armor.bbox.y - 8, 20, std::max(20, img.rows - 5));
+    const cv::Point text_org(text_x, text_y);
+
+    cv::putText(img, text, text_org, cv::FONT_HERSHEY_SIMPLEX, 0.7,
+                cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
   }
 }
 

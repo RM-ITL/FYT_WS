@@ -41,6 +41,7 @@ private:
 private:
   ov::Core core_;
   ov::CompiledModel compiled_model_;
+  ov::InferRequest infer_request_;
 
   std::string model_path_;
   std::string device_;
@@ -50,6 +51,7 @@ private:
   EnemyColor detect_color_;
   bool debug_;
 
+  cv::Mat input_canvas_;
   cv::Mat binary_img_;
   rm_interfaces::msg::DebugLights debug_lights_;
   rm_interfaces::msg::DebugArmors debug_armors_;
