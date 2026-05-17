@@ -104,10 +104,10 @@ void SerialDriverNode::listenLoop() {
       receive_data.header.frame_id = target_frame_;
       serial_receive_data_pub_->publish(receive_data);
 
-      // 统一只计算一次姿态
-      const double roll_rad = receive_data.roll * M_PI / 180.0;
-      const double pitch_rad = -receive_data.pitch * M_PI / 180.0;
-      const double yaw_rad = receive_data.yaw * M_PI / 180.0;
+      // serial/receive 与 gimbal/state 统一使用弧度制
+      const double roll_rad = receive_data.roll;
+      const double pitch_rad = -receive_data.pitch;
+      const double yaw_rad = receive_data.yaw;
 
       tf2::Quaternion q;
       q.setRPY(roll_rad, pitch_rad, yaw_rad);

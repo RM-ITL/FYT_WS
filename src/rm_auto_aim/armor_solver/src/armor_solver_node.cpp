@@ -436,9 +436,9 @@ void ArmorSolverNode::publishMarkers(const rm_interfaces::msg::Target &target_ms
 
     selection_marker_.action = visualization_msgs::msg::Marker::ADD;
     selection_marker_.points.clear();
-    selection_marker_.pose.position.y = gimbal_cmd.distance * sin(gimbal_cmd.yaw * M_PI / 180);
-    selection_marker_.pose.position.x = gimbal_cmd.distance * cos(gimbal_cmd.yaw * M_PI / 180);
-    selection_marker_.pose.position.z = gimbal_cmd.distance * sin(gimbal_cmd.pitch * M_PI / 180);
+    selection_marker_.pose.position.y = gimbal_cmd.distance * sin(gimbal_cmd.yaw);
+    selection_marker_.pose.position.x = gimbal_cmd.distance * cos(gimbal_cmd.yaw);
+    selection_marker_.pose.position.z = gimbal_cmd.distance * sin(gimbal_cmd.pitch);
 
     trajectory_marker_.action = visualization_msgs::msg::Marker::ADD;
     trajectory_marker_.points.clear();

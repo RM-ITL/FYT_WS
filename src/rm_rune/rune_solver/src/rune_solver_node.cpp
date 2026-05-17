@@ -179,11 +179,10 @@ void RuneSolverNode::timerCallback() {
 
   // If target never detected
   if (last_rune_target_.header.frame_id.empty()) {
-    control_msg.yaw_diff = 0;
-    control_msg.pitch_diff = 0;
     control_msg.distance = -1;
     control_msg.pitch = 0;
     control_msg.yaw = 0;
+    control_msg.control = false;
     control_msg.fire_advice = false;
     gimbal_pub_->publish(control_msg);
     return;
@@ -212,19 +211,17 @@ void RuneSolverNode::timerCallback() {
       control_msg = rune_solver_->solveGimbalCmd(pred_pos);
     } catch (...) {
       FYT_ERROR("rune_solver", "solveGimbalCmd error");
-      control_msg.yaw_diff = 0;
-      control_msg.pitch_diff = 0;
       control_msg.distance = -1;
       control_msg.pitch = 0;
       control_msg.yaw = 0;
+      control_msg.control = false;
       control_msg.fire_advice = false;
     }
   } else {
-    control_msg.yaw_diff = 0;
-    control_msg.pitch_diff = 0;
     control_msg.distance = -1;
     control_msg.pitch = 0;
     control_msg.yaw = 0;
+    control_msg.control = false;
     control_msg.fire_advice = false;
   }
   gimbal_pub_->publish(control_msg);
@@ -286,9 +283,9 @@ void RuneSolverNode::timerCallback() {
         aimming_line_marker_.lifetime = rclcpp::Duration::from_seconds(0.1);
         geometry_msgs::msg::Point aimming_line_start, aimming_line_end;
         aimming_line_marker_.points.emplace_back(aimming_line_start);
-        aimming_line_end.y = 15 * sin(control_msg.yaw * M_PI / 180);
-        aimming_line_end.x = 15 * cos(control_msg.yaw * M_PI / 180);
-        aimming_line_end.z = 15 * sin(control_msg.pitch * M_PI / 180);
+        aimming_line_end.y = 15 * sin(control_msg.yaw);
+        aimming_line_end.x = 15 * cos(control_msg.yaw);
+        aimming_line_end.z = 15 * sin(control_msg.pitch);
         aimming_line_marker_.points.emplace_back(aimming_line_end);
         marker_array.markers.push_back(aimming_line_marker_);
 

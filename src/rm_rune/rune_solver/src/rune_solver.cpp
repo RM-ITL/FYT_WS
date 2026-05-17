@@ -271,24 +271,25 @@ rm_interfaces::msg::GimbalCmd RuneSolver::solveGimbalCmd(const Eigen::Vector3d &
   double yaw_offset = angle_offset[1] * M_PI / 180;
   double cmd_pitch = pitch + pitch_offset;
   double cmd_yaw = angles::normalize_angle(yaw + yaw_offset);
+  const double yaw_diff = angles::shortest_angular_distance(current_yaw, cmd_yaw);
+  const double pitch_diff = cmd_pitch - current_pitch;
 
   rm_interfaces::msg::GimbalCmd gimbal_cmd;
-  gimbal_cmd.yaw = cmd_yaw * 180 / M_PI;
-  gimbal_cmd.pitch = cmd_pitch * 180 / M_PI;
-  gimbal_cmd.yaw_diff = (cmd_yaw - current_yaw) * 180 / M_PI;
-  gimbal_cmd.pitch_diff = (cmd_pitch - current_pitch) * 180 / M_PI;
+  gimbal_cmd.control = true;
+  gimbal_cmd.yaw = cmd_yaw;
+  gimbal_cmd.pitch = cmd_pitch;
   gimbal_cmd.distance = distance;
 
   // Judge whether to shoot
   constexpr double TARGET_RADIUS = 0.308;
-  double shooting_range_yaw = std::abs(atan2(TARGET_RADIUS / 2, distance)) * 180 / M_PI;
-  double shooting_range_pitch = std::abs(atan2(TARGET_RADIUS / 2, distance)) * 180 / M_PI;
+  double shooting_range_yaw = std::abs(atan2(TARGET_RADIUS / 2, distance));
+  double shooting_range_pitch = std::abs(atan2(TARGET_RADIUS / 2, distance));
   // Limit the shooting area to 1 degree to avoid not shooting when distance is
   // too large
-  shooting_range_yaw = std::max(shooting_range_yaw, 1.0);
-  shooting_range_pitch = std::max(shooting_range_pitch, 1.0);
-  if (std::abs(gimbal_cmd.yaw_diff) < shooting_range_yaw &&
-      std::abs(gimbal_cmd.pitch_diff) < shooting_range_pitch) {
+  shooting_range_yaw = std::max(shooting_range_yaw, 1.0 * M_PI / 180.0);
+  shooting_range_pitch = std::max(shooting_range_pitch, 1.0 * M_PI / 180.0);
+  if (std::abs(yaw_diff) < shooting_range_yaw &&
+      std::abs(pitch_diff) < shooting_range_pitch) {
     gimbal_cmd.fire_advice = true;
     FYT_DEBUG("rune_solver", "You Can Fire!");
   } else {

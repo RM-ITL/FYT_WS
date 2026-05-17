@@ -127,11 +127,10 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   // Get current roll, yaw and pitch of gimbal
   try {
     if (has_runtime_state_) {
-      // 当前 runtime_state_ 中 yaw / pitch 仍然是 degree
-      // Solver 内部一直按 rad 运算，所以这里先转 rad
+      // GimbalState 已统一为弧度制；pitch 仍保持“消息层正上抬、TF层取负”的语义。
       rpy_[0] = 0.0;
-      rpy_[1] = -runtime_state_.pitch * M_PI / 180.0;
-      rpy_[2] = runtime_state_.yaw * M_PI / 180.0;
+      rpy_[1] = -runtime_state_.pitch;
+      rpy_[2] = runtime_state_.yaw;
     } else {
       auto gimbal_tf =
         tf2_buffer_->lookupTransform(target.header.frame_id, "gimbal_link", tf2::TimePointZero);
@@ -306,14 +305,14 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   }
   // ==================== 前馈输出结束 ====================
 
-  // 回填控制消息（消息层当前仍使用 degree）
+  // 回填控制消息（统一使用弧度制）
   gimbal_cmd.control = true;
-  gimbal_cmd.yaw = cmd_yaw * 180 / M_PI;
-  gimbal_cmd.pitch = cmd_pitch * 180 / M_PI;
-  gimbal_cmd.yaw_vel = ff_yaw_vel * 180 / M_PI;
-  gimbal_cmd.pitch_vel = ff_pitch_vel * 180 / M_PI;
-  gimbal_cmd.yaw_acc = ff_yaw_acc * 180 / M_PI;
-  gimbal_cmd.pitch_acc = ff_pitch_acc * 180 / M_PI;
+  gimbal_cmd.yaw = cmd_yaw;
+  gimbal_cmd.pitch = cmd_pitch;
+  gimbal_cmd.yaw_vel = ff_yaw_vel;
+  gimbal_cmd.pitch_vel = ff_pitch_vel;
+  gimbal_cmd.yaw_acc = ff_yaw_acc;
+  gimbal_cmd.pitch_acc = ff_pitch_acc;
 
   // 更新历史
   last_control_.valid = true;

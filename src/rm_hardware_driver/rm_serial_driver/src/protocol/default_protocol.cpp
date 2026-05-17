@@ -15,7 +15,21 @@
 
 #include "rm_serial_driver/protocol/default_protocol.hpp"
 
+#include <cmath>
+
 namespace fyt::serial_driver::protocol {
+
+namespace {
+
+inline float deg2rad(float deg) {
+  return deg * static_cast<float>(M_PI) / 180.0f;
+}
+
+inline float rad2deg(float rad) {
+  return rad * 180.0f / static_cast<float>(M_PI);
+}
+
+}  // namespace
 
 DefaultProtocol::DefaultProtocol(std::string_view port_name, bool enable_data_print) {
   auto uart_transporter = std::make_shared<UartTransporter>(std::string(port_name));
@@ -42,8 +56,8 @@ std::vector<rclcpp::Client<rm_interfaces::srv::SetMode>::SharedPtr> DefaultProto
 void DefaultProtocol::send(const rm_interfaces::msg::GimbalCmd &data) {
   FixedPacket<16> packet;
   packet.loadData<unsigned char>(data.fire_advice ? FireState::Fire : FireState::NotFire, 1);
-  packet.loadData<float>(static_cast<float>(data.pitch), 2);
-  packet.loadData<float>(static_cast<float>(data.yaw), 6);
+  packet.loadData<float>(rad2deg(static_cast<float>(data.pitch)), 2);
+  packet.loadData<float>(rad2deg(static_cast<float>(data.yaw)), 6);
   packet.loadData<float>(static_cast<float>(data.distance), 10);
   packet_tool_->sendPacket(packet);
 }
@@ -55,6 +69,9 @@ bool DefaultProtocol::receive(rm_interfaces::msg::SerialReceiveData &data) {
     packet.unloadData(data.roll, 2);
     packet.unloadData(data.pitch, 6);
     packet.unloadData(data.yaw, 10);
+    data.roll = deg2rad(data.roll);
+    data.pitch = deg2rad(data.pitch);
+    data.yaw = deg2rad(data.yaw);
     return true;
   } else {
     return false;

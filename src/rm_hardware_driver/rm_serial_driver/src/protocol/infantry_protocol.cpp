@@ -23,18 +23,6 @@
 
 namespace fyt::serial_driver::protocol {
 
-namespace {
-
-inline float deg2rad(float deg) {
-  return deg * static_cast<float>(M_PI) / 180.0f;
-}
-
-inline float rad2deg(float rad) {
-  return rad * 180.0f / static_cast<float>(M_PI);
-}
-
-}  // namespace
-
 ProtocolInfantry::ProtocolInfantry(
   std::string_view port_name,
   bool enable_data_print,
@@ -143,19 +131,16 @@ void ProtocolInfantry::send(const rm_interfaces::msg::GimbalCmd &data) {
 void ProtocolInfantry::sendVisionCmdV1(const rm_interfaces::msg::GimbalCmd &data) {
   VisionToGimbalAutoAim packet;
 
-  // 注意：
-  // 当前 FYT_WS 的 armor_solver 仍然把 yaw / pitch 以“度”写进 GimbalCmd.msg
-  // 为了兼容当前上层逻辑，这里统一转换成 rad 再发给下位机，
-  // 以匹配 Auto_aim 风格协议。
+  // FYT_WS 内部消息层统一使用弧度制；该协议本身也使用弧度制。
   packet.mode = data.control ? (data.fire_advice ? 2 : 1) : 0;
 
-  packet.yaw = deg2rad(static_cast<float>(data.yaw));
-  packet.yaw_vel = deg2rad(static_cast<float>(data.yaw_vel));
-  packet.yaw_acc = deg2rad(static_cast<float>(data.yaw_acc));
+  packet.yaw = static_cast<float>(data.yaw);
+  packet.yaw_vel = static_cast<float>(data.yaw_vel);
+  packet.yaw_acc = static_cast<float>(data.yaw_acc);
 
-  packet.pitch = deg2rad(static_cast<float>(data.pitch));
-  packet.pitch_vel = deg2rad(static_cast<float>(data.pitch_vel));
-  packet.pitch_acc = deg2rad(static_cast<float>(data.pitch_acc));
+  packet.pitch = static_cast<float>(data.pitch);
+  packet.pitch_vel = static_cast<float>(data.pitch_vel);
+  packet.pitch_acc = static_cast<float>(data.pitch_acc);
 
   if (!writeExact(&packet, sizeof(packet))) {
     return;
@@ -193,7 +178,7 @@ bool ProtocolInfantry::recvGimbalStateV1(rm_interfaces::msg::SerialReceiveData &
 
   // 当前 SerialReceiveData.msg 还比较老，没有 q / yaw_vel / pitch_vel / bullet_count 字段，
   // 所以这里只能做兼容填充：
-  // 1. 用 q 转成 roll/pitch/yaw（单位：度）
+  // 1. 用 q 转成 roll/pitch/yaw（单位：rad）
   // 2. bullet_speed 正常填
   // 3. mode 正常填
   data.mode = packet.mode;
@@ -205,12 +190,10 @@ bool ProtocolInfantry::recvGimbalStateV1(rm_interfaces::msg::SerialReceiveData &
   double yaw_rad = 0.0;
   tf2::Matrix3x3(q).getRPY(roll_rad, pitch_rad, yaw_rad);
 
-  // 注意这里的 pitch 要取负，才能兼容你当前 serial_driver_node.cpp 里
-  //   auto pitch = -receive_data.pitch * M_PI / 180.0;
-  // 这一套旧逻辑，保证最终重建出来的姿态方向一致
-  data.roll = rad2deg(static_cast<float>(roll_rad));
-  data.pitch = -rad2deg(static_cast<float>(pitch_rad));
-  data.yaw = rad2deg(static_cast<float>(yaw_rad));
+  // pitch 依旧保持“消息层正上抬、TF层取负”的兼容语义，但单位统一为弧度
+  data.roll = static_cast<float>(roll_rad);
+  data.pitch = static_cast<float>(-pitch_rad);
+  data.yaw = static_cast<float>(yaw_rad);
 
   last_error_message_ = "ok";
   return true;

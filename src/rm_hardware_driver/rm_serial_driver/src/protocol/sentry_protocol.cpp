@@ -16,8 +16,21 @@
 #include "rm_serial_driver/protocol/sentry_protocol.hpp"
 // ros2
 #include <geometry_msgs/msg/twist.hpp>
+#include <cmath>
 
 namespace fyt::serial_driver::protocol {
+namespace {
+
+inline float deg2rad(float deg) {
+  return deg * static_cast<float>(M_PI) / 180.0f;
+}
+
+inline float rad2deg(float rad) {
+  return rad * 180.0f / static_cast<float>(M_PI);
+}
+
+}  // namespace
+
 ProtocolSentry::ProtocolSentry(std::string_view port_name, bool enable_data_print) {
   auto uart_transporter = std::make_shared<UartTransporter>(std::string(port_name));
   packet_tool_ = std::make_shared<FixedPacketTool<32>>(uart_transporter);
@@ -29,8 +42,9 @@ void ProtocolSentry::send(const rm_interfaces::msg::GimbalCmd &data) {
   // is_spin
   // packet_.loadData<unsigned char>(0x00, 2);
   // gimbal control
-  packet_.loadData<float>(static_cast<float>(data.pitch), 4);
-  packet_.loadData<float>(static_cast<float>(data.yaw), 8);
+  // 哨兵下位机当前仍沿用角度制协议，这里做消息层(rad)到协议层(deg)的转换。
+  packet_.loadData<float>(rad2deg(static_cast<float>(data.pitch)), 4);
+  packet_.loadData<float>(rad2deg(static_cast<float>(data.yaw)), 8);
   packet_.loadData<float>(static_cast<float>(data.distance), 12);
   // // chassis control
   // // linear x
@@ -90,6 +104,8 @@ bool ProtocolSentry::receive(rm_interfaces::msg::SerialReceiveData &data) {
 
     packet.unloadData(data.judge_system_data.game_status, 25);
 
+    data.pitch = deg2rad(data.pitch);
+    data.yaw = deg2rad(data.yaw);
     data.bullet_speed = 25;
     return true;
   } else {
