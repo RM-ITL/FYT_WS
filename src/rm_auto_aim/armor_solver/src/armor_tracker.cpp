@@ -159,6 +159,9 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
       });
       measurement = buildMeasurement(tracked_armor);
       target_state = ekf->update(measurement);
+      another_r = target_state(8) + target_state(9);
+      d_za = target_state(10);
+      d_zc = 0.0;
       updateTrackedArmorType();
       no_switch_count_++;
       if (no_switch_count_ > single_plate_threshold &&
@@ -177,6 +180,9 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
           Measure{armor_id, static_cast<std::size_t>(tracked_armors_num), another_r, d_za});
       measurement = buildMeasurement(tracked_armor);
       target_state = ekf->update(measurement);
+      another_r = target_state(8) + target_state(9);
+      d_za = target_state(10);
+      d_zc = 0.0;
       matched = true;
       no_switch_count_ = 0;
       single_plate_mode_ = false;
@@ -197,6 +203,9 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
             Measure{armor_id, static_cast<std::size_t>(tracked_armors_num), another_r, d_za});
         measurement = buildMeasurement(tracked_armor);
         target_state = ekf->update(measurement);
+        another_r = target_state(8) + target_state(9);
+        d_za = target_state(10);
+        d_zc = 0.0;
         matched = true;
         no_switch_count_ = 0;
         single_plate_mode_ = false;
@@ -274,7 +283,7 @@ void Tracker::initEKF(const Armor &a) noexcept {
   double yc = ya + r * sin(yaw);
   double zc = za;
   d_za = 0, d_zc = 0, another_r = r;
-  target_state << xc, 0, yc, 0, zc, 0, yaw, 0, r, d_zc;
+  target_state << xc, 0, yc, 0, zc, 0, yaw, 0, r, 0, 0;
 
   ekf->setState(target_state);
 }
@@ -288,10 +297,15 @@ void Tracker::handleArmorJump(const Armor &current_armor) noexcept {
     target_state(6) = yaw;
     // Only 4 armors has 2 radius and height
     if (tracked_armors_num == ArmorsNum::NORMAL_4) {
-      d_za = target_state(4) + target_state(9) - current_armor.pose.position.z;
-      std::swap(target_state(8), another_r);
-      d_zc = d_zc == 0 ? -d_za : 0;
-      target_state(9) = d_zc;
+      const double current_r = std::hypot(
+          current_armor.pose.position.x - target_state(0),
+          current_armor.pose.position.y - target_state(2));
+      const double alternate_r = std::max(0.05, current_r);
+      target_state(9) = alternate_r - target_state(8);
+      target_state(10) = current_armor.pose.position.z - target_state(4);
+      another_r = target_state(8) + target_state(9);
+      d_za = target_state(10);
+      d_zc = 0.0;
     }
     FYT_DEBUG("armor_solver", "Armor Jump!");
   }
@@ -312,7 +326,8 @@ void Tracker::handleArmorJump(const Armor &current_armor) noexcept {
     target_state(3) = 0;                   // vyc
     target_state(4) = p.z;                 // zc
     target_state(5) = 0;                   // vzc
-    target_state(9) = d_zc;                // d_zc
+    target_state(9) = 0.0;                 // l
+    target_state(10) = 0.0;                // h
     FYT_WARN("armor_solver", "State wrong!");
   }
 
@@ -372,6 +387,13 @@ bool Tracker::isStateDiverged() const noexcept {
   if (std::abs(target_state(7)) > max_abs_v_yaw) {
     return true;
   }
+  if (target_state(8) < 0.05 || target_state(8) > 0.5) {
+    return true;
+  }
+  if (target_state(8) + target_state(9) < 0.05 ||
+      target_state(8) + target_state(9) > 0.5) {
+    return true;
+  }
   return false;
 }
 
@@ -389,16 +411,11 @@ int Tracker::estimateArmorIndex(const Eigen::VectorXd &state, const Armor &armor
   std::vector<Eigen::Vector3d> candidates;
   candidates.reserve(armors_num);
 
-  bool is_current_pair = true;
   for (std::size_t i = 0; i < armors_num; ++i) {
     double temp_yaw = state(6) + static_cast<double>(i) * (2.0 * M_PI / armors_num);
-    double r = state(8);
-    double dz = state(9);
-    if (armors_num == 4) {
-      r = is_current_pair ? state(8) : another_r;
-      dz = state(9) + (is_current_pair ? 0.0 : d_za);
-      is_current_pair = !is_current_pair;
-    }
+    const bool use_secondary = armors_num == 4 && (i % 2 == 1);
+    const double r = use_secondary ? state(8) + state(9) : state(8);
+    const double dz = use_secondary ? state(10) : 0.0;
     candidates.emplace_back(
         state(0) - r * std::cos(temp_yaw), state(2) - r * std::sin(temp_yaw), state(4) + dz);
   }
@@ -428,7 +445,7 @@ Eigen::Matrix<double, Z_N, 1> Tracker::buildMeasurement(const Armor &armor) noex
 
 Eigen::Vector3d Tracker::getArmorPositionFromState(const Eigen::VectorXd &x) noexcept {
   // Calculate predicted position of the current armor
-  double xc = x(0), yc = x(2), za = x(4) + x(9);
+  double xc = x(0), yc = x(2), za = x(4);
   double yaw = x(6), r = x(8);
   double xa = xc - r * cos(yaw);
   double ya = yc - r * sin(yaw);

@@ -78,20 +78,30 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
            q_vyaw_vyaw = pow(t, 2) * yaw;
     double q_r = pow(t, 4) / 4 * r;
     double q_d_zc = pow(t, 4) / 4 * d_zc;
-    // clang-format off
-    //    xc      v_xc    yc      v_yc    zc      v_zc    yaw         v_yaw       r       d_za
-    q <<  q_x_x,  q_x_vx, 0,      0,      0,      0,      0,          0,          0,      0,
-          q_x_vx, q_vx_vx,0,      0,      0,      0,      0,          0,          0,      0,
-          0,      0,      q_y_y,  q_y_vy, 0,      0,      0,          0,          0,      0,
-          0,      0,      q_y_vy, q_vy_vy,0,      0,      0,          0,          0,      0,
-          0,      0,      0,      0,      q_z_z,  q_z_vz, 0,          0,          0,      0,
-          0,      0,      0,      0,      q_z_vz, q_vz_vz,0,          0,          0,      0,
-          0,      0,      0,      0,      0,      0,      q_yaw_yaw,  q_yaw_vyaw, 0,      0,
-          0,      0,      0,      0,      0,      0,      q_yaw_vyaw, q_vyaw_vyaw,0,      0,
-          0,      0,      0,      0,      0,      0,      0,          0,          q_r,    0,
-          0,      0,      0,      0,      0,      0,      0,          0,          0,      q_d_zc;
+    q.setZero();
+    q(0, 0) = q_x_x;
+    q(0, 1) = q_x_vx;
+    q(1, 0) = q_x_vx;
+    q(1, 1) = q_vx_vx;
 
-    // clang-format on
+    q(2, 2) = q_y_y;
+    q(2, 3) = q_y_vy;
+    q(3, 2) = q_y_vy;
+    q(3, 3) = q_vy_vy;
+
+    q(4, 4) = q_z_z;
+    q(4, 5) = q_z_vz;
+    q(5, 4) = q_z_vz;
+    q(5, 5) = q_vz_vz;
+
+    q(6, 6) = q_yaw_yaw;
+    q(6, 7) = q_yaw_vyaw;
+    q(7, 6) = q_yaw_vyaw;
+    q(7, 7) = q_vyaw_vyaw;
+
+    q(8, 8) = q_r;
+    q(9, 9) = q_r;
+    q(10, 10) = q_d_zc;
     return q;
   };
   // update_R - measurement noise covariance matrix
@@ -369,9 +379,9 @@ void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr
       target_msg.yaw = state(6);
       target_msg.v_yaw = state(7);
       target_msg.radius_1 = state(8);
-      target_msg.radius_2 = tracker_->another_r;
-      target_msg.d_zc = state(9);
-      target_msg.d_za = tracker_->d_za;
+      target_msg.radius_2 = state(8) + state(9);
+      target_msg.d_zc = 0.0;
+      target_msg.d_za = state(10);
     }
   }
 

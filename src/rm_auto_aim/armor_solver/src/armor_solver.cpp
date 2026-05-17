@@ -78,6 +78,7 @@ Solver::Solver(std::weak_ptr<rclcpp::Node> n) : node_(n) {
   if(!manual_compensator_->updateMapFlow(angle_offset)) {
     FYT_WARN("armor_solver", "Manual compensator update failed!");
   }
+  planner_ = std::make_unique<TinyMpcPlanner>(node_);
 
   state = State::TRACKING_ARMOR;
   overflow_count_ = 0;
@@ -196,137 +197,42 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   }
 
   const bool aim_center = (state == TRACKING_CENTER);
+  auto predict_fn = [this, &target, aim_center, base_delay](
+                        double extra_time_s) -> TinyMpcPlanner::ReferenceCommand {
+    const auto cmd = predictCommandAtTime(
+        target, std::max(0.0, base_delay + extra_time_s), aim_center);
+    return {cmd.yaw, cmd.pitch, cmd.distance, cmd.valid};
+  };
 
-  auto cmd_prev = predictCommandAtTime(target, std::max(0.0, base_delay + controller_delay_ - predictive_ff_dt_), aim_center);
-  auto cmd_now = predictCommandAtTime(target, std::max(0.0, base_delay + controller_delay_), aim_center);
-  auto cmd_next = predictCommandAtTime(target, std::max(0.0, base_delay + controller_delay_ + predictive_ff_dt_), aim_center);
-
-  if (!cmd_now.valid) {
-    throw std::runtime_error("No valid predicted command");
+  const auto plan = planner_->plan(target, trajectory_compensator_->velocity, predict_fn);
+  if (!plan.valid) {
+    throw std::runtime_error("TinyMPC planner failed to produce a valid plan");
   }
-
-  const double cmd_yaw = cmd_now.yaw;
-  const double cmd_pitch = cmd_now.pitch;
-  gimbal_cmd.distance = cmd_now.distance;
 
   const bool level1 =
-    isOnTarget(rpy_[2], rpy_[1], cmd_yaw, cmd_pitch, cmd_now.distance);
+      isOnTarget(rpy_[2], rpy_[1], plan.yaw, plan.pitch, plan.distance);
   const bool level2 =
-    distance_based_shooter_check(rpy_[2], rpy_[1], cmd_yaw, cmd_pitch, cmd_now.distance);
-  gimbal_cmd.fire_advice = level1 && level2;
+      distance_based_shooter_check(rpy_[2], rpy_[1], plan.yaw, plan.pitch, plan.distance);
 
-  // ==================== 前馈输出开始 ====================
-  double filtered_cmd_yaw = cmd_yaw;
-  double filtered_cmd_pitch = cmd_pitch;
-  double ff_yaw_vel = 0.0;
-  double ff_pitch_vel = 0.0;
-  double ff_yaw_acc = 0.0;
-  double ff_pitch_acc = 0.0;
-
-  bool feedforward_valid = false;
-
-  const bool predictive_window_valid = cmd_prev.valid && cmd_next.valid;
-
-  if (last_control_.valid && predictive_window_valid) {
-    const double dt_ff = (current_time - last_control_.stamp).seconds();
-    const double predictive_dt = std::max(1e-4, predictive_ff_dt_);
-    const double raw_delta_yaw =
-      angles::shortest_angular_distance(last_control_.yaw, cmd_now.yaw);
-    const double raw_delta_pitch = cmd_now.pitch - last_control_.pitch;
-
-    // 1. 时间戳异常保护
-    if (dt_ff > 1e-4 && dt_ff < 0.2) {
-      // 2. 突然跳变保护：切板/重捕获时不输出离谱前馈
-      if (std::abs(raw_delta_yaw) < max_delta_yaw_for_feedforward_ &&
-          std::abs(raw_delta_pitch) < max_delta_pitch_for_feedforward_) {
-        // 3. 对最终控制角先做一级低通，再差分，降低静止目标噪声放大
-        filtered_cmd_yaw = angles::normalize_angle(
-          last_control_.filtered_yaw +
-          feedforward_alpha_ *
-            angles::shortest_angular_distance(last_control_.filtered_yaw, cmd_now.yaw));
-        filtered_cmd_pitch =
-          last_control_.filtered_pitch +
-          feedforward_alpha_ * (cmd_now.pitch - last_control_.filtered_pitch);
-
-        const double filtered_prev_yaw = angles::normalize_angle(
-          last_control_.filtered_yaw +
-          feedforward_alpha_ *
-            angles::shortest_angular_distance(last_control_.filtered_yaw, cmd_prev.yaw));
-        const double filtered_prev_pitch =
-          last_control_.filtered_pitch +
-          feedforward_alpha_ * (cmd_prev.pitch - last_control_.filtered_pitch);
-
-        const double filtered_next_yaw = angles::normalize_angle(
-          filtered_cmd_yaw +
-          feedforward_alpha_ *
-            angles::shortest_angular_distance(filtered_cmd_yaw, cmd_next.yaw));
-        const double filtered_next_pitch =
-          filtered_cmd_pitch +
-          feedforward_alpha_ * (cmd_next.pitch - filtered_cmd_pitch);
-
-        // 4. 使用预测轨迹的中心差分，替代单纯对最终命令做帧间差分
-        ff_yaw_vel =
-          angles::shortest_angular_distance(filtered_prev_yaw, filtered_next_yaw) / (2.0 * predictive_dt);
-        ff_pitch_vel = (filtered_next_pitch - filtered_prev_pitch) / (2.0 * predictive_dt);
-
-        // 5. 限幅速度
-        ff_yaw_vel = std::clamp(ff_yaw_vel, -max_yaw_vel_, max_yaw_vel_);
-        ff_pitch_vel = std::clamp(ff_pitch_vel, -max_pitch_vel_, max_pitch_vel_);
-
-        // 6. 参考轨迹二阶差分作为加速度前馈，默认仍可关闭以抑制静止目标噪声
-        if (enable_acceleration_feedforward_) {
-          const double prev_to_now_yaw =
-            angles::shortest_angular_distance(filtered_prev_yaw, filtered_cmd_yaw);
-          const double now_to_next_yaw =
-            angles::shortest_angular_distance(filtered_cmd_yaw, filtered_next_yaw);
-          ff_yaw_acc = (now_to_next_yaw - prev_to_now_yaw) / (predictive_dt * predictive_dt);
-          ff_pitch_acc =
-            (filtered_next_pitch - 2.0 * filtered_cmd_pitch + filtered_prev_pitch) /
-            (predictive_dt * predictive_dt);
-
-          // 7. 限幅加速度
-          ff_yaw_acc = std::clamp(ff_yaw_acc, -max_yaw_acc_, max_yaw_acc_);
-          ff_pitch_acc = std::clamp(ff_pitch_acc, -max_pitch_acc_, max_pitch_acc_);
-        }
-
-        feedforward_valid = true;
-      }
-    }
-  }
-
-  // 8. 如果目标当前不可控或前馈无效，则保持清零
-  if (!feedforward_valid) {
-    filtered_cmd_yaw = cmd_yaw;
-    filtered_cmd_pitch = cmd_pitch;
-    ff_yaw_vel = 0.0;
-    ff_pitch_vel = 0.0;
-    ff_yaw_acc = 0.0;
-    ff_pitch_acc = 0.0;
-  }
-  // ==================== 前馈输出结束 ====================
-
-  // 回填控制消息（统一使用弧度制）
   gimbal_cmd.control = true;
-  gimbal_cmd.yaw = cmd_yaw;
-  gimbal_cmd.pitch = cmd_pitch;
-  gimbal_cmd.yaw_vel = ff_yaw_vel;
-  gimbal_cmd.pitch_vel = ff_pitch_vel;
-  gimbal_cmd.yaw_acc = ff_yaw_acc;
-  gimbal_cmd.pitch_acc = ff_pitch_acc;
+  gimbal_cmd.distance = plan.distance;
+  gimbal_cmd.yaw = plan.yaw;
+  gimbal_cmd.pitch = plan.pitch;
+  gimbal_cmd.yaw_vel = plan.yaw_vel;
+  gimbal_cmd.pitch_vel = plan.pitch_vel;
+  gimbal_cmd.yaw_acc = plan.yaw_acc;
+  gimbal_cmd.pitch_acc = plan.pitch_acc;
+  gimbal_cmd.fire_advice = plan.fire && level1 && level2;
 
-  // 更新历史
   last_control_.valid = true;
   last_control_.stamp = current_time;
-  last_control_.yaw = cmd_yaw;
-  last_control_.pitch = cmd_pitch;
-  last_control_.filtered_yaw = filtered_cmd_yaw;
-  last_control_.filtered_pitch = filtered_cmd_pitch;
-  last_control_.yaw_vel = ff_yaw_vel;
-  last_control_.pitch_vel = ff_pitch_vel;
+  last_control_.yaw = plan.yaw;
+  last_control_.pitch = plan.pitch;
+  last_control_.filtered_yaw = plan.yaw;
+  last_control_.filtered_pitch = plan.pitch;
+  last_control_.yaw_vel = plan.yaw_vel;
+  last_control_.pitch_vel = plan.pitch_vel;
 
-  if (gimbal_cmd.fire_advice) {
-    FYT_DEBUG("armor_solver", "You Need Fire!");
-  }
   return gimbal_cmd;
 }
 

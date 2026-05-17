@@ -31,6 +31,7 @@
 #include "rm_interfaces/msg/gimbal_cmd.hpp"
 #include "rm_interfaces/msg/gimbal_state.hpp"
 #include "rm_interfaces/msg/target.hpp"
+#include "armor_solver/planner.hpp"
 #include "rm_utils/math/trajectory_compensator.hpp"
 #include "rm_utils/math/manual_compensator.hpp"
 
@@ -104,6 +105,7 @@ private:
 
   std::unique_ptr<TrajectoryCompensator> trajectory_compensator_;
   std::unique_ptr<ManualCompensator> manual_compensator_;
+  std::unique_ptr<TinyMpcPlanner> planner_;
 
   std::array<double, 3> rpy_;
 

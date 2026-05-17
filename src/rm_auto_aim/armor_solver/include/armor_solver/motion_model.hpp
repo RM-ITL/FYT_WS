@@ -30,7 +30,8 @@ enum class MotionModel {
 };
 
 // X_N: state dimension, Z_N: measurement dimension
-constexpr int X_N = 10, Z_N = 4;
+// State layout: x vx y vy z vz yaw v_yaw r l h
+constexpr int X_N = 11, Z_N = 4;
 
 struct Predict {
   explicit Predict(double dt, MotionModel model = MotionModel::CONSTANT_VEL_ROT)
