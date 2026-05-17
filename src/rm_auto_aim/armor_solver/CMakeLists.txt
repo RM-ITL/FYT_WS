@@ -24,7 +24,17 @@ ament_auto_find_build_dependencies()
 ###########
 
 ament_auto_add_library(${PROJECT_NAME} SHARED
-  DIRECTORY src
+  src/armor_solver.cpp
+  src/armor_solver_node.cpp
+  src/armor_tracker.cpp
+  src/planner.cpp
+  src/tinympc/admm.cpp
+  src/tinympc/rho_benchmark.cpp
+  src/tinympc/tiny_api.cpp
+)
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+  include/armor_solver
 )
 
 rclcpp_components_register_node(${PROJECT_NAME}
