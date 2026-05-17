@@ -17,6 +17,7 @@
 
 // ceres
 #include <ceres/ceres.h>
+#include <cmath>
 // project
 #include "rm_utils/math/extended_kalman_filter.hpp"
 
@@ -69,12 +70,28 @@ struct Predict {
 };
 
 struct Measure {
+  int armor_id = 0;
+  std::size_t armors_num = 4;
+  double another_r = 0.26;
+  double d_za = 0.0;
+
   template <typename T>
-  void operator()(const T x[Z_N], T z[Z_N]) {
-    z[0] = x[0] - ceres::cos(x[6]) * x[8];
-    z[1] = x[2] - ceres::sin(x[6]) * x[8];
-    z[2] = x[4] + x[9];
-    z[3] = x[6];
+  void operator()(const T x[X_N], T z[Z_N]) {
+    const T armors_num_t = T(static_cast<double>(armors_num));
+    const T temp_yaw = x[6] + T(static_cast<double>(armor_id)) * T(2.0 * M_PI) / armors_num_t;
+    const bool use_secondary = armors_num == 4 && (armor_id % 2 == 1);
+    const T radius = use_secondary ? T(another_r) : x[8];
+    const T z_offset = x[9] + (use_secondary ? T(d_za) : T(0.0));
+
+    const T armor_x = x[0] - ceres::cos(temp_yaw) * radius;
+    const T armor_y = x[2] - ceres::sin(temp_yaw) * radius;
+    const T armor_z = x[4] + z_offset;
+    const T horizontal_dist = ceres::sqrt(armor_x * armor_x + armor_y * armor_y);
+
+    z[0] = ceres::atan2(armor_y, armor_x);
+    z[1] = ceres::atan2(armor_z, horizontal_dist);
+    z[2] = ceres::sqrt(horizontal_dist * horizontal_dist + armor_z * armor_z);
+    z[3] = temp_yaw;
   }
 };
 

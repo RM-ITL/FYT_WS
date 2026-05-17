@@ -14,11 +14,17 @@
 
 #include "armor_detector/armor_pose_estimator.hpp"
 
+#include <cmath>
+
 #include "armor_detector/types.hpp"
 #include "rm_utils/logger/log.hpp"
 #include "rm_utils/math/utils.hpp"
 
 namespace fyt::auto_aim {
+namespace {
+constexpr double kMaxReprojectionError = 8.0;
+}
+
 ArmorPoseEstimator::ArmorPoseEstimator(
     sensor_msgs::msg::CameraInfo::SharedPtr camera_info) {
   // Setup pnp solver
@@ -42,6 +48,10 @@ ArmorPoseEstimator::extractArmorPoses(const std::vector<Armor> &armors,
   std::vector<rm_interfaces::msg::Armor> armors_msg;
 
   for (const auto &armor : armors) {
+    if (!armor.is_valid) {
+      continue;
+    }
+
     std::vector<cv::Mat> rvecs, tvecs;
 
     // Use PnP to get the initial pose information
@@ -54,6 +64,15 @@ ArmorPoseEstimator::extractArmorPoses(const std::vector<Armor> &armors,
 
       Eigen::Matrix3d R = utils::cvToEigen(rmat);
       Eigen::Vector3d t = utils::cvToEigen(tvecs[0]);
+
+      const std::string coord_frame_name =
+          armor.type == ArmorType::SMALL ? "small" : "large";
+      const double reprojection_error = pnp_solver_->calculateReprojectionError(
+          armor.landmarks(), rvecs[0], tvecs[0], coord_frame_name);
+      if (!std::isfinite(reprojection_error) ||
+          reprojection_error > kMaxReprojectionError) {
+        continue;
+      }
 
       double armor_roll =
           rotationMatrixToRPY(R_gimbal_camera_ * R)[0] * 180 / M_PI;
@@ -71,6 +90,9 @@ ArmorPoseEstimator::extractArmorPoses(const std::vector<Armor> &armors,
       // Fill basic info
       armor_msg.type = armorTypeToString(armor.type);
       armor_msg.number = armor.number;
+      armor_msg.confidence = armor.confidence;
+      armor_msg.rank = armor.rank;
+      armor_msg.valid = true;
 
       // Fill pose
       armor_msg.pose.position.x = t(0);
@@ -84,6 +106,8 @@ ArmorPoseEstimator::extractArmorPoses(const std::vector<Armor> &armors,
       // Fill the distance to image center
       armor_msg.distance_to_image_center =
           pnp_solver_->calculateDistanceToCenter(armor.center);
+      armor_msg.center_norm_x = armor.center_norm.x;
+      armor_msg.center_norm_y = armor.center_norm.y;
 
       armors_msg.push_back(std::move(armor_msg));
     } else {

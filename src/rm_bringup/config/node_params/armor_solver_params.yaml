@@ -22,6 +22,10 @@
 
       tracking_thres: 2
       lost_time_thres: 1.0
+      single_plate_threshold: 50
+      omega_threshold: 0.5
+      timeout_sec: 0.1
+      max_abs_v_yaw: 12.0
     
     solver:
       prediction_delay: 0.0

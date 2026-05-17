@@ -17,9 +17,9 @@ const std::array<YoloDetector::ClassInfo, kClassCount> kClassMap = {{
     {EnemyColor::BLUE, "sentry", ArmorType::SMALL},
     {EnemyColor::RED, "sentry", ArmorType::SMALL},
     {EnemyColor::WHITE, "sentry", ArmorType::SMALL},
-    {EnemyColor::BLUE, "1", ArmorType::SMALL},
-    {EnemyColor::RED, "1", ArmorType::SMALL},
-    {EnemyColor::WHITE, "1", ArmorType::SMALL},
+    {EnemyColor::BLUE, "1", ArmorType::LARGE},
+    {EnemyColor::RED, "1", ArmorType::LARGE},
+    {EnemyColor::WHITE, "1", ArmorType::LARGE},
     {EnemyColor::BLUE, "2", ArmorType::SMALL},
     {EnemyColor::RED, "2", ArmorType::SMALL},
     {EnemyColor::WHITE, "2", ArmorType::SMALL},
@@ -53,6 +53,41 @@ const std::array<YoloDetector::ClassInfo, kClassCount> kClassMap = {{
     {EnemyColor::RED, "5", ArmorType::LARGE},
     {EnemyColor::WHITE, "5", ArmorType::LARGE},
 }};
+
+float computeRectangularError(const std::array<cv::Point2f, 4> &corners) {
+  const cv::Point2f left_center = (corners[0] + corners[1]) * 0.5f;
+  const cv::Point2f right_center = (corners[2] + corners[3]) * 0.5f;
+  const cv::Point2f left_to_right = right_center - left_center;
+  const float roll = std::atan2(left_to_right.y, left_to_right.x);
+
+  const float left_error = std::abs(
+      std::atan2((corners[0] - corners[1]).y, (corners[0] - corners[1]).x) -
+      roll - static_cast<float>(CV_PI / 2.0));
+  const float right_error = std::abs(
+      std::atan2((corners[3] - corners[2]).y, (corners[3] - corners[2]).x) -
+      roll - static_cast<float>(CV_PI / 2.0));
+  return std::max(left_error, right_error);
+}
+
+bool isGeometryValid(const Armor &armor) {
+  const float left_edge = cv::norm(armor.corners[0] - armor.corners[1]);
+  const float right_edge = cv::norm(armor.corners[2] - armor.corners[3]);
+  const float top_edge = cv::norm(armor.corners[1] - armor.corners[2]);
+  const float bottom_edge = cv::norm(armor.corners[0] - armor.corners[3]);
+
+  const float max_width = std::max(left_edge, right_edge);
+  const float max_length = std::max(top_edge, bottom_edge);
+  if (max_width < 4.0f || max_length < 6.0f) {
+    return false;
+  }
+
+  const float ratio = max_length / std::max(1.0f, max_width);
+  if (ratio < 0.8f || ratio > 8.0f) {
+    return false;
+  }
+
+  return armor.rectangular_error < 1.0f;
+}
 }  // namespace
 
 YoloDetector::YoloDetector(const std::string &model_path,
@@ -98,7 +133,7 @@ bool YoloDetector::decodeClass(int class_id, ClassInfo &info) const noexcept {
     return false;
   }
   info = kClassMap[static_cast<size_t>(class_id)];
-  return info.color != EnemyColor::WHITE;
+  return info.color != EnemyColor::WHITE && info.color == detect_color_;
 }
 
 void YoloDetector::sortCorners(std::array<cv::Point2f, 4> &corners) const noexcept {
@@ -203,10 +238,6 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
   std::vector<int> indices;
   cv::dnn::NMSBoxes(boxes, confidences, score_threshold_, nms_threshold_, indices);
 
-  std::vector<Armor> candidate_armors;
-  candidate_armors.reserve(indices.size());
-  bool has_target_color = false;
-
   for (int idx : indices) {
     ClassInfo class_info{};
     if (!decodeClass(class_ids[idx], class_info)) {
@@ -223,12 +254,12 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
     armor.corners = corners_list[idx];
     armor.center = (armor.corners[0] + armor.corners[1] + armor.corners[2] + armor.corners[3]) * 0.25f;
     armor.classfication_result = class_info.number;
-    has_target_color = has_target_color || (armor.color == detect_color_);
-    candidate_armors.emplace_back(std::move(armor));
-  }
+    armor.rank = armorRankFromString(armor.number);
+    armor.center_norm = {armor.center.x / input.cols, armor.center.y / input.rows};
+    armor.rectangular_error = computeRectangularError(armor.corners);
+    armor.is_valid = armor.confidence >= score_threshold_ && isGeometryValid(armor);
 
-  for (auto &armor : candidate_armors) {
-    if (has_target_color && armor.color != detect_color_) {
+    if (!armor.is_valid) {
       continue;
     }
 
@@ -237,10 +268,17 @@ std::vector<Armor> YoloDetector::detect(const cv::Mat &input) noexcept {
     debug_armor.center_x = armor.center.x;
     debug_armor.light_ratio = 1.0;
     debug_armor.center_distance = 1.0;
-    debug_armor.angle = 0.0;
+    debug_armor.angle = armor.rectangular_error;
     debug_armors_.data.emplace_back(debug_armor);
     armors_.emplace_back(std::move(armor));
   }
+
+  std::sort(armors_.begin(), armors_.end(), [](const Armor &a, const Armor &b) {
+    if (a.rank != b.rank) {
+      return a.rank < b.rank;
+    }
+    return a.center_norm.y < b.center_norm.y;
+  });
 
   return armors_;
 }

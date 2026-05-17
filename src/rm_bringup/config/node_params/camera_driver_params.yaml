@@ -14,6 +14,7 @@
   ros__parameters:
     # 让驱动从包内路径读取配置文件（避免绝对路径）
     config_path: "/home/hou/FYT_WS/src/rm_bringup/config/camera_config.yaml"
+    camera_frame_id: "camera_optical_frame"
 
     # 下列为“采集参数”的占位，当前这版驱动不会读取它们，
     # 仅作为未来扩展或统一配置的参考；实际以 camera_config.yaml 为准。

@@ -41,6 +41,16 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
   tracker_ = std::make_unique<Tracker>(max_match_distance, max_match_yaw_diff);
   tracker_->tracking_thres = this->declare_parameter("tracker.tracking_thres", 5);
   lost_time_thres_ = this->declare_parameter("tracker.lost_time_thres", 0.3);
+  tracker_->single_plate_threshold =
+      this->declare_parameter("tracker.single_plate_threshold", 50);
+  tracker_->omega_threshold =
+      this->declare_parameter("tracker.omega_threshold", 0.5);
+  tracker_->timeout_sec =
+      this->declare_parameter("tracker.timeout_sec", 0.1);
+  tracker_->max_position_norm =
+      this->declare_parameter("max_armor_distance", 10.0);
+  tracker_->max_abs_v_yaw =
+      this->declare_parameter("tracker.max_abs_v_yaw", 12.0);
 
   // EKF
   // xa = x_armor, xc = x_robot_center
@@ -91,12 +101,14 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
   r_yaw_ = declare_parameter("ekf.r_yaw", 0.02);
   auto u_r = [this](const Eigen::Matrix<double, Z_N, 1> &z) {
     Eigen::Matrix<double, Z_N, Z_N> r;
-    // clang-format off
-    r << r_x_ * std::abs(z[0]), 0, 0, 0,
-         0, r_y_ * std::abs(z[1]), 0, 0,
-         0, 0, r_z_ * std::abs(z[2]), 0,
-         0, 0, 0, r_yaw_;
-    // clang-format on
+    const double yaw_var = std::max(1e-4, r_x_ * (1.0 + std::abs(z[0])));
+    const double pitch_var = std::max(1e-4, r_y_ * (1.0 + std::abs(z[1])));
+    const double dist_var = std::max(1e-4, r_z_ * std::max(1.0, std::abs(z[2])));
+    const double armor_angle_var = std::max(1e-4, r_yaw_);
+    r << yaw_var, 0, 0, 0,
+         0, pitch_var, 0, 0,
+         0, 0, dist_var, 0,
+         0, 0, 0, armor_angle_var;
     return r;
   };
   // P - error estimate covariance matrix
@@ -305,7 +317,9 @@ void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr
   armors_msg->armors.erase(std::remove_if(armors_msg->armors.begin(),
                                           armors_msg->armors.end(),
                                           [](const rm_interfaces::msg::Armor &armor) {
-                                            return abs(armor.pose.position.z) > 2;
+                                            return !armor.valid ||
+                                                   armor.confidence < 0.5f ||
+                                                   abs(armor.pose.position.z) > 2;
                                           }),
                            armors_msg->armors.end());
 
@@ -331,10 +345,10 @@ void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr
     }
     tracker_->update(armors_msg);
     // Publish measurement
-    measure_msg.x = tracker_->measurement(0);
-    measure_msg.y = tracker_->measurement(1);
-    measure_msg.z = tracker_->measurement(2);
-    measure_msg.yaw = tracker_->measurement(3);
+    measure_msg.x = tracker_->measurement(0);   // yaw
+    measure_msg.y = tracker_->measurement(1);   // pitch
+    measure_msg.z = tracker_->measurement(2);   // distance
+    measure_msg.yaw = tracker_->measurement(3); // armor angle
     measure_pub_->publish(measure_msg);
 
     if (tracker_->tracker_state == Tracker::DETECTING) {

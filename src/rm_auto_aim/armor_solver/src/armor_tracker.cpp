@@ -18,6 +18,7 @@
 
 #include "armor_solver/armor_tracker.hpp"
 // std
+#include <algorithm>
 #include <cfloat>
 #include <memory>
 #include <string>
@@ -33,49 +34,71 @@
 #include "rm_utils/logger/log.hpp"
 
 namespace fyt::auto_aim {
+namespace {
+Eigen::Vector3d xyzToYpd(const Eigen::Vector3d &xyz) {
+  const double yaw = std::atan2(xyz.y(), xyz.x());
+  const double horizontal = std::hypot(xyz.x(), xyz.y());
+  const double pitch = std::atan2(xyz.z(), horizontal);
+  return Eigen::Vector3d(yaw, pitch, xyz.norm());
+}
+}
+
 Tracker::Tracker(double max_match_distance, double max_match_yaw_diff)
 : tracker_state(LOST)
 , tracked_id(std::string(""))
-, measurement(Eigen::VectorXd::Zero(4))
-, target_state(Eigen::VectorXd::Zero(9))
+, measurement(Eigen::VectorXd::Zero(Z_N))
+, target_state(Eigen::VectorXd::Zero(X_N))
 , max_match_distance_(max_match_distance)
 , max_match_yaw_diff_(max_match_yaw_diff)
 , detect_count_(0)
 , lost_count_(0)
-, last_yaw_(0) {}
+, no_switch_count_(0)
+, single_plate_mode_(false)
+, last_yaw_(0)
+, last_update_time_(std::chrono::steady_clock::now()) {}
 
 void Tracker::init(const Armors::SharedPtr &armors_msg) noexcept {
   if (armors_msg->armors.empty()) {
     return;
   }
 
-  // Simply choose the armor that is closest to image center
-  double min_distance = DBL_MAX;
-  tracked_armor = armors_msg->armors[0];
-  for (const auto &armor : armors_msg->armors) {
-    if (armor.distance_to_image_center < min_distance) {
-      min_distance = armor.distance_to_image_center;
-      tracked_armor = armor;
-    }
-  }
+  tracked_armor = *std::min_element(
+      armors_msg->armors.begin(), armors_msg->armors.end(),
+      [](const Armor &a, const Armor &b) {
+        const int rank_a = armorRank(a);
+        const int rank_b = armorRank(b);
+        if (rank_a != rank_b) {
+          return rank_a < rank_b;
+        }
+        if (std::abs(a.distance_to_image_center - b.distance_to_image_center) > 1e-3) {
+          return a.distance_to_image_center < b.distance_to_image_center;
+        }
+        return a.confidence > b.confidence;
+      });
 
   initEKF(tracked_armor);
   FYT_INFO("armor_solver", "Init EKF!");
 
   tracked_id = tracked_armor.number;
   tracker_state = DETECTING;
-
-  if (tracked_armor.type == "large" &&
-      (tracked_id == "3" || tracked_id == "4" || tracked_id == "5")) {
-    tracked_armors_num = ArmorsNum::BALANCE_2;
-  } else if (tracked_id == "outpost") {
-    tracked_armors_num = ArmorsNum::OUTPOST_3;
-  } else {
-    tracked_armors_num = ArmorsNum::NORMAL_4;
-  }
+  detect_count_ = 0;
+  lost_count_ = 0;
+  no_switch_count_ = 0;
+  single_plate_mode_ = false;
+  last_update_time_ = std::chrono::steady_clock::now();
+  updateTrackedArmorType();
 }
 
 void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  const double dt = std::chrono::duration<double>(now - last_update_time_).count();
+  last_update_time_ = now;
+  if (tracker_state != LOST && dt > timeout_sec) {
+    FYT_WARN("armor_solver", "Tracker reset due to stale input: {:.3f}s", dt);
+    resetTracking();
+    return;
+  }
+
   // KF predict
   Eigen::VectorXd ekf_prediction = ekf->predict();
 
@@ -90,6 +113,7 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
     auto predicted_position = getArmorPositionFromState(ekf_prediction);
     double min_position_diff = DBL_MAX;
     double yaw_diff = DBL_MAX;
+    double best_cost = DBL_MAX;
     for (const auto &armor : armors_msg->armors) {
       // Only consider armors with the same id
       if (armor.number == tracked_id) {
@@ -100,20 +124,18 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
         auto p = armor.pose.position;
         Eigen::Vector3d position_vec(p.x, p.y, p.z);
         double position_diff = (predicted_position - position_vec).norm();
-        if (position_diff < min_position_diff) {
+        const double measured_yaw = orientationToYaw(armor.pose.orientation);
+        const double current_yaw_diff =
+            std::abs(angles::shortest_angular_distance(ekf_prediction(6), measured_yaw));
+        const double cost = position_diff + current_yaw_diff * 0.05 +
+                            static_cast<double>(armorRank(armor)) * 0.01 +
+                            static_cast<double>(armor.distance_to_image_center) * 1e-4;
+        if (cost < best_cost) {
           // Find the closest armor
+          best_cost = cost;
           min_position_diff = position_diff;
-          yaw_diff = abs(orientationToYaw(armor.pose.orientation) - ekf_prediction(6));
+          yaw_diff = current_yaw_diff;
           tracked_armor = armor;
-          // Update tracked armor type
-          if (tracked_armor.type == "large" &&
-              (tracked_id == "3" || tracked_id == "4" || tracked_id == "5")) {
-            tracked_armors_num = ArmorsNum::BALANCE_2;
-          } else if (tracked_id == "outpost") {
-            tracked_armors_num = ArmorsNum::OUTPOST_3;
-          } else {
-            tracked_armors_num = ArmorsNum::NORMAL_4;
-          }
         }
       }
     }
@@ -123,19 +145,67 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
     if (min_position_diff < max_match_distance_ && yaw_diff < max_match_yaw_diff_) {
       // Matched armor found
       matched = true;
-      auto p = tracked_armor.pose.position;
       // Update EKF
-      double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
-      measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
+      const int armor_id = estimateArmorIndex(ekf_prediction, tracked_armor);
+      ekf->setMeasureFunc(
+          Measure{armor_id, static_cast<std::size_t>(tracked_armors_num), another_r, d_za});
+      ekf->setResidualFunc([](const Eigen::Matrix<double, Z_N, 1> &z,
+                              const Eigen::Matrix<double, Z_N, 1> &z_pri) {
+        Eigen::Matrix<double, Z_N, 1> residual = z - z_pri;
+        residual(0) = angles::shortest_angular_distance(z_pri(0), z(0));
+        residual(1) = angles::shortest_angular_distance(z_pri(1), z(1));
+        residual(3) = angles::shortest_angular_distance(z_pri(3), z(3));
+        return residual;
+      });
+      measurement = buildMeasurement(tracked_armor);
       target_state = ekf->update(measurement);
-    } else if (same_id_armors_count == 1 && yaw_diff > max_match_yaw_diff_) {
+      updateTrackedArmorType();
+      no_switch_count_++;
+      if (no_switch_count_ > single_plate_threshold &&
+          std::abs(target_state(7)) < omega_threshold) {
+        single_plate_mode_ = true;
+      }
+    } else if (!single_plate_mode_ && same_id_armors_count == 1 &&
+               yaw_diff > max_match_yaw_diff_) {
       // Matched armor not found, but there is only one armor with the same id
       // and yaw has jumped, take this case as the target is spinning and armor
       // jumped
       handleArmorJump(same_id_armor);
+      tracked_armor = same_id_armor;
+      const int armor_id = estimateArmorIndex(target_state, tracked_armor);
+      ekf->setMeasureFunc(
+          Measure{armor_id, static_cast<std::size_t>(tracked_armors_num), another_r, d_za});
+      measurement = buildMeasurement(tracked_armor);
+      target_state = ekf->update(measurement);
+      matched = true;
+      no_switch_count_ = 0;
+      single_plate_mode_ = false;
+    } else if (same_id_armors_count == 0 && armors_msg->armors.size() == 1) {
+      const auto &fallback_armor = armors_msg->armors.front();
+      auto p = fallback_armor.pose.position;
+      Eigen::Vector3d current_p(p.x, p.y, p.z);
+      const double fallback_position_diff = (predicted_position - current_p).norm();
+      const double fallback_yaw_diff = std::abs(angles::shortest_angular_distance(
+          ekf_prediction(6), orientationToYaw(fallback_armor.pose.orientation)));
+      if (fallback_position_diff < max_match_distance_ * 0.8 &&
+          fallback_yaw_diff < max_match_yaw_diff_ * 1.2) {
+        tracked_armor = fallback_armor;
+        tracked_id = tracked_armor.number;
+        updateTrackedArmorType();
+        const int armor_id = estimateArmorIndex(target_state, tracked_armor);
+        ekf->setMeasureFunc(
+            Measure{armor_id, static_cast<std::size_t>(tracked_armors_num), another_r, d_za});
+        measurement = buildMeasurement(tracked_armor);
+        target_state = ekf->update(measurement);
+        matched = true;
+        no_switch_count_ = 0;
+        single_plate_mode_ = false;
+      }
     } else {
       // No matched armor found
       FYT_WARN("armor_solver", "No matched armor found!");
+      no_switch_count_ = 0;
+      single_plate_mode_ = false;
     }
   }
 
@@ -146,6 +216,12 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept {
   } else if (target_state(8) > 0.4) {
     target_state(8) = 0.4;
     ekf->setState(target_state);
+  }
+
+  if (isStateDiverged()) {
+    FYT_WARN("armor_solver", "Tracker reset because target state diverged");
+    resetTracking();
+    return;
   }
 
   // Tracking state machine
@@ -253,6 +329,101 @@ double Tracker::orientationToYaw(const geometry_msgs::msg::Quaternion &q) noexce
   yaw = last_yaw_ + angles::shortest_angular_distance(last_yaw_, yaw);
   last_yaw_ = yaw;
   return yaw;
+}
+
+void Tracker::updateTrackedArmorType() noexcept {
+  if (tracked_armor.type == "large" &&
+      (tracked_id == "3" || tracked_id == "4" || tracked_id == "5")) {
+    tracked_armors_num = ArmorsNum::BALANCE_2;
+  } else if (tracked_id == "outpost") {
+    tracked_armors_num = ArmorsNum::OUTPOST_3;
+  } else {
+    tracked_armors_num = ArmorsNum::NORMAL_4;
+  }
+}
+
+int Tracker::armorRank(const Armor &armor) noexcept {
+  if (armor.rank > 0) {
+    return armor.rank;
+  }
+  if (armor.number == "3" || armor.number == "4") {
+    return 1;
+  }
+  if (armor.number == "sentry") {
+    return 2;
+  }
+  if (armor.number == "1" || armor.number == "5") {
+    return 3;
+  }
+  if (armor.number == "2") {
+    return 4;
+  }
+  return 5;
+}
+
+bool Tracker::isStateDiverged() const noexcept {
+  if (!target_state.allFinite()) {
+    return true;
+  }
+  const Eigen::Vector3d center(target_state(0), target_state(2), target_state(4));
+  if (center.norm() > max_position_norm) {
+    return true;
+  }
+  if (std::abs(target_state(7)) > max_abs_v_yaw) {
+    return true;
+  }
+  return false;
+}
+
+void Tracker::resetTracking() noexcept {
+  tracker_state = LOST;
+  tracked_id.clear();
+  detect_count_ = 0;
+  lost_count_ = 0;
+  no_switch_count_ = 0;
+  single_plate_mode_ = false;
+}
+
+int Tracker::estimateArmorIndex(const Eigen::VectorXd &state, const Armor &armor) const noexcept {
+  const std::size_t armors_num = static_cast<std::size_t>(tracked_armors_num);
+  std::vector<Eigen::Vector3d> candidates;
+  candidates.reserve(armors_num);
+
+  bool is_current_pair = true;
+  for (std::size_t i = 0; i < armors_num; ++i) {
+    double temp_yaw = state(6) + static_cast<double>(i) * (2.0 * M_PI / armors_num);
+    double r = state(8);
+    double dz = state(9);
+    if (armors_num == 4) {
+      r = is_current_pair ? state(8) : another_r;
+      dz = state(9) + (is_current_pair ? 0.0 : d_za);
+      is_current_pair = !is_current_pair;
+    }
+    candidates.emplace_back(
+        state(0) - r * std::cos(temp_yaw), state(2) - r * std::sin(temp_yaw), state(4) + dz);
+  }
+
+  const Eigen::Vector3d observed(
+      armor.pose.position.x, armor.pose.position.y, armor.pose.position.z);
+  double min_error = DBL_MAX;
+  int best_id = 0;
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    const double error = (candidates[i] - observed).norm();
+    if (error < min_error) {
+      min_error = error;
+      best_id = static_cast<int>(i);
+    }
+  }
+  return best_id;
+}
+
+Eigen::Matrix<double, Z_N, 1> Tracker::buildMeasurement(const Armor &armor) noexcept {
+  const Eigen::Vector3d xyz(
+      armor.pose.position.x, armor.pose.position.y, armor.pose.position.z);
+  const Eigen::Vector3d ypd = xyzToYpd(xyz);
+  Eigen::Matrix<double, Z_N, 1> z;
+  z << ypd(0), ypd(1), ypd(2), orientationToYaw(armor.pose.orientation);
+  return z;
 }
 
 Eigen::Vector3d Tracker::getArmorPositionFromState(const Eigen::VectorXd &x) noexcept {

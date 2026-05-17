@@ -48,6 +48,7 @@ public:
 
   using UpdateQFunc = std::function<MatrixXX()>;
   using UpdateRFunc = std::function<MatrixZZ(const MatrixZ1 &z)>;
+  using ResidualFunc = std::function<MatrixZ1(const MatrixZ1 &, const MatrixZ1 &)>;
 
   explicit ExtendedKalmanFilter(const PredicFunc &f,
                                 const MeasureFunc &h,
@@ -57,6 +58,9 @@ public:
   : f(f), h(h), update_Q(u_q), update_R(u_r), P_post(P0) {
     F = MatrixXX::Zero();
     H = MatrixZX::Zero();
+    residual_func_ = [](const MatrixZ1 &z, const MatrixZ1 &z_pri) {
+      return z - z_pri;
+    };
   }
 
   // Set the initial state
@@ -65,6 +69,7 @@ public:
   void setPredictFunc(const PredicFunc &f) noexcept { this->f = f; }
 
   void setMeasureFunc(const MeasureFunc &h) noexcept { this->h = h; }
+  void setResidualFunc(const ResidualFunc &func) noexcept { residual_func_ = func; }
 
   // Compute a predicted state
   MatrixX1 predict() noexcept {
@@ -107,7 +112,8 @@ public:
 
     R = update_R(z);
     K = P_pri * H.transpose() * (H * P_pri * H.transpose() + R).inverse();
-    x_post = x_post + K * (z - z_pri);
+    const MatrixZ1 residual = residual_func_(z, z_pri);
+    x_post = x_post + K * residual;
     P_post = (MatrixXX::Identity() - K * H) * P_pri;
     return x_post;
   }
@@ -125,6 +131,7 @@ private:
   // Measurement noise covariance matrix
   UpdateRFunc update_R;
   MatrixZZ R;
+  ResidualFunc residual_func_;
 
   // Priori error estimate covariance matrix
   MatrixXX P_pri;

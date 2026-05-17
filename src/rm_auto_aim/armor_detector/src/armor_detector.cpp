@@ -67,6 +67,14 @@ std::vector<Armor> Detector::detect(const cv::Mat &input) noexcept {
     classifier->eraseIgnoreClasses(armors_);
   }
 
+  for (auto &armor : armors_) {
+    armor.rank = armorRankFromString(armor.number);
+    if (input.cols > 0 && input.rows > 0) {
+      armor.center_norm = {armor.center.x / input.cols, armor.center.y / input.rows};
+    }
+    armor.is_valid = !armor.number.empty() && armor.number != "negative";
+  }
+
   return armors_;
 }
 

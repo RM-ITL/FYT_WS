@@ -75,7 +75,7 @@ private:
     double exposure_us_, gain_, fps_;
     cv::Size target_size_;
     std::string image_topic_;
-    std::string frame_id_ = "camera_link";
+    std::string frame_id_ = "camera_optical_frame";
     bool swap_red_blue_ = false;
     int vid_ = 0x2bdf;
     int pid_ = 0x0299;

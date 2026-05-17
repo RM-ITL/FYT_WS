@@ -21,6 +21,7 @@
 #define ARMOR_SOLVER_TRACKER_HPP_
 
 // std
+#include <chrono>
 #include <memory>
 #include <string>
 // ros2
@@ -61,6 +62,11 @@ public:
 
   int tracking_thres;  // frame
   int lost_thres;      // second
+  int single_plate_threshold = 50;
+  double omega_threshold = 0.5;
+  double timeout_sec = 0.1;
+  double max_position_norm = 10.0;
+  double max_abs_v_yaw = 12.0;
 
   Armor tracked_armor;
   std::string tracked_id;
@@ -88,8 +94,18 @@ private:
 
   int detect_count_;
   int lost_count_;
+  int no_switch_count_;
+  bool single_plate_mode_;
 
   double last_yaw_;
+  std::chrono::steady_clock::time_point last_update_time_;
+
+  void updateTrackedArmorType() noexcept;
+  static int armorRank(const Armor &armor) noexcept;
+  bool isStateDiverged() const noexcept;
+  void resetTracking() noexcept;
+  int estimateArmorIndex(const Eigen::VectorXd &state, const Armor &armor) const noexcept;
+  Eigen::Matrix<double, Z_N, 1> buildMeasurement(const Armor &armor) noexcept;
 };
 
 }  // namespace fyt::auto_aim

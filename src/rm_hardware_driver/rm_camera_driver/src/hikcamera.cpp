@@ -19,7 +19,7 @@ HikRobotNode::HikRobotNode(const rclcpp::NodeOptions& options)
     this->declare_parameter("config_path", "/home/hou/FYT_WS/src/rm_bringup/config/camera_config.yaml");
     this->declare_parameter("camera_name", "hik_camera");   // 新增
     this->declare_parameter("camera_info_url", "file:///home/hou/FYT_WS/src/rm_bringup/config/camera_calib.yaml"); // 新增
-    this->declare_parameter("camera_frame_id", "camera_link");
+    this->declare_parameter("camera_frame_id", "camera_optical_frame");
     
     this->get_parameter("config_path", config_path);
     std::string camera_name, camera_info_url;
@@ -58,7 +58,7 @@ HikRobotNode::HikRobotNode(const std::string& config_path, const std::string& na
 {
     this->declare_parameter("camera_name", "hik_camera"); 
     this->declare_parameter("camera_info_url", "file:///home/hou/FYT_WS/src/rm_bringup/config/camera_calib.yaml");
-    this->declare_parameter("camera_frame_id", "camera_link");
+    this->declare_parameter("camera_frame_id", "camera_optical_frame");
     std::string camera_name, camera_info_url;
     this->get_parameter("camera_name", camera_name);
     this->get_parameter("camera_info_url", camera_info_url);

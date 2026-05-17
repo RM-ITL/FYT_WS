@@ -1,4 +1,9 @@
 string number
 string type
+float32 confidence
+int32 rank
+bool valid
 float32 distance_to_image_center
+float32 center_norm_x
+float32 center_norm_y
 geometry_msgs/Pose pose

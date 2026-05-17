@@ -56,6 +56,22 @@ inline std::string armorTypeToString(const ArmorType &type) {
   }
 }
 
+inline int armorRankFromString(const std::string &number) noexcept {
+  if (number == "3" || number == "4") {
+    return 1;
+  }
+  if (number == "sentry") {
+    return 2;
+  }
+  if (number == "1" || number == "5") {
+    return 3;
+  }
+  if (number == "2") {
+    return 4;
+  }
+  return 5;
+}
+
 // Struct used to store the light bar
 struct Light : public cv::RotatedRect {
   Light() = default;
@@ -153,6 +169,10 @@ struct Armor {
   std::string number;
   float confidence;
   std::string classfication_result;
+  int rank = 5;
+  cv::Point2f center_norm{};
+  float rectangular_error = 0.0f;
+  bool is_valid = true;
 };
 
 }  // namespace fyt::auto_aim
