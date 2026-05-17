@@ -118,10 +118,10 @@ void SerialDriverNode::listenLoop() {
       gimbal_state_msg.orientation = tf2::toMsg(q);
       gimbal_state_msg.yaw = receive_data.yaw;
       gimbal_state_msg.pitch = receive_data.pitch;
-      gimbal_state_msg.yaw_vel = 0.0f;
-      gimbal_state_msg.pitch_vel = 0.0f;
+      gimbal_state_msg.yaw_vel = receive_data.yaw_vel;
+      gimbal_state_msg.pitch_vel = receive_data.pitch_vel;
       gimbal_state_msg.bullet_speed = receive_data.bullet_speed;
-      gimbal_state_msg.bullet_count = 0;
+      gimbal_state_msg.bullet_count = receive_data.bullet_count;
       gimbal_state_pub_->publish(gimbal_state_msg);
 
       for (auto &[service_name, client] : set_mode_clients_) {

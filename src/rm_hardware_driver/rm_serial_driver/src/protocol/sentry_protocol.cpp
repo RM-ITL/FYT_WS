@@ -106,7 +106,10 @@ bool ProtocolSentry::receive(rm_interfaces::msg::SerialReceiveData &data) {
 
     data.pitch = deg2rad(data.pitch);
     data.yaw = deg2rad(data.yaw);
+    data.yaw_vel = 0.0f;
+    data.pitch_vel = 0.0f;
     data.bullet_speed = 25;
+    data.bullet_count = 0;
     return true;
   } else {
     return false;

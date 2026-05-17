@@ -1,7 +1,10 @@
 std_msgs/Header header
 uint8 mode
 float32 bullet_speed
+uint16 bullet_count
 float32 roll 
 float32 yaw
 float32 pitch
+float32 yaw_vel
+float32 pitch_vel
 JudgeSystemData judge_system_data

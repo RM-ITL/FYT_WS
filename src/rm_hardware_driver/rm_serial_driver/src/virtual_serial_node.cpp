@@ -49,12 +49,15 @@ public:
 
     serial_receive_data_msg_.header.frame_id = "odom";
     serial_receive_data_msg_.bullet_speed = 25.0;
+    serial_receive_data_msg_.bullet_count = 0;
     transform_stamped_.header.frame_id = "odom";
     transform_stamped_.child_frame_id = "gimbal_link";
     serial_receive_data_msg_.mode = 0;
     serial_receive_data_msg_.roll = this->declare_parameter("roll", 0.0);
     serial_receive_data_msg_.pitch = this->declare_parameter("pitch", 0.0);
     serial_receive_data_msg_.yaw = this->declare_parameter("yaw", 0.0);
+    serial_receive_data_msg_.yaw_vel = this->declare_parameter("yaw_vel", 0.0);
+    serial_receive_data_msg_.pitch_vel = this->declare_parameter("pitch_vel", 0.0);
 
     // Heartbeat
     heartbeat_ = HeartBeatPublisher::create(this);
@@ -84,6 +87,8 @@ public:
       serial_receive_data_msg_.mode = mode;
       serial_receive_data_msg_.pitch = pitch;
       serial_receive_data_msg_.yaw = yaw;
+      serial_receive_data_msg_.yaw_vel = this->get_parameter("yaw_vel").as_double();
+      serial_receive_data_msg_.pitch_vel = this->get_parameter("pitch_vel").as_double();
       tf2::Quaternion q;
       q.setRPY(roll, -pitch, yaw);
       transform_stamped_.transform.rotation = tf2::toMsg(q);

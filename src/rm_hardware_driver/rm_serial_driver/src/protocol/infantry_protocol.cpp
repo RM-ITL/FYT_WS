@@ -176,13 +176,9 @@ bool ProtocolInfantry::recvGimbalStateV1(rm_interfaces::msg::SerialReceiveData &
     return false;
   }
 
-  // 当前 SerialReceiveData.msg 还比较老，没有 q / yaw_vel / pitch_vel / bullet_count 字段，
-  // 所以这里只能做兼容填充：
-  // 1. 用 q 转成 roll/pitch/yaw（单位：rad）
-  // 2. bullet_speed 正常填
-  // 3. mode 正常填
   data.mode = packet.mode;
   data.bullet_speed = packet.bullet_speed;
+  data.bullet_count = packet.bullet_count;
 
   tf2::Quaternion q(packet.q[1], packet.q[2], packet.q[3], packet.q[0]);  // x y z w
   double roll_rad = 0.0;
@@ -194,6 +190,8 @@ bool ProtocolInfantry::recvGimbalStateV1(rm_interfaces::msg::SerialReceiveData &
   data.roll = static_cast<float>(roll_rad);
   data.pitch = static_cast<float>(-pitch_rad);
   data.yaw = static_cast<float>(yaw_rad);
+  data.yaw_vel = packet.yaw_vel;
+  data.pitch_vel = -packet.pitch_vel;
 
   last_error_message_ = "ok";
   return true;

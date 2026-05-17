@@ -72,6 +72,10 @@ bool DefaultProtocol::receive(rm_interfaces::msg::SerialReceiveData &data) {
     data.roll = deg2rad(data.roll);
     data.pitch = deg2rad(data.pitch);
     data.yaw = deg2rad(data.yaw);
+    data.yaw_vel = 0.0f;
+    data.pitch_vel = 0.0f;
+    data.bullet_speed = 0.0f;
+    data.bullet_count = 0;
     return true;
   } else {
     return false;
